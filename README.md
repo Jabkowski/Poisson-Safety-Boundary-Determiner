@@ -38,3 +38,24 @@ Run with 2 arguments:
 ```console
 docker run --rm mcr_data_generation output_file_name.h5 1000
 ```
+
+### RUN inside docker
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/mcr/R2024b/bin/glnxa64/:/opt/mcr/R2024b/runtime/glnxa64/
+
+### my fixes -> 
+apt-get install libglew-dev
+
+### existing error still ->  
+root@7d93a4766567:/workspaces/Poisson-Safety-Boundary-Determiner# ./matlab/generate_maps_and_psf output.h5 100
+PostVMInit failed to initialize com.mathworks.mwswing.MJStartupForDesktop
+PostVMInit failed to initialize com.mathworks.mwswing.MJStartup
+Could not find java/awt/Component
+
+Error in javaclasspath
+
+Error in javaclasspath
+
+Error in javaaddpath (line 69)
+
+MATLAB:Java:GenericException

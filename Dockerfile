@@ -9,17 +9,16 @@ RUN apt update && apt install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Pobierz MATLAB Runtime
-RUN wget https://ssd.mathworks.com/supportfiles/downloads/R2024a/Release/0/deployment_files/installer/complete/glnxa64/MATLAB_Runtime_R2024a_glnxa64.zip \
+RUN wget https://ssd.mathworks.com/supportfiles/downloads/R2024b/Release/0/deployment_files/installer/complete/glnxa64/MATLAB_Runtime_R2024b_glnxa64.zip \
     && mkdir /mcr_install \
-    && unzip -q MATLAB_Runtime_R2024a_glnxa64.zip -d /mcr_install \
-    && rm MATLAB_Runtime_R2024a_glnxa64.zip
+    && unzip -q MATLAB_Runtime_R2024b_glnxa64.zip -d /mcr_install \
+    && rm MATLAB_Runtime_R2024b_glnxa64.zip
 
 # Zainstaluj
 RUN /mcr_install/install -mode silent -agreeToLicense yes -destinationFolder /opt/mcr || \
     (echo "INSTALL FAILED" && ls -R /tmp && cat /tmp/mathworks*/*.log && exit 1)
 
-# Dodaj runtime do LD_LIBRARY_PATH
-ENV LD_LIBRARY_PATH=/opt/mcr/v912/runtime/glnxa64:/opt/mcr/v912/bin/glnxa64:/opt/mcr/v912/sys/os/glnxa64:/opt/mcr/v912/extern/bin/glnxa64
+RUN apt-get install libglew-dev
 
 WORKDIR /matlab
 
