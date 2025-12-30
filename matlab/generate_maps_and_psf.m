@@ -2,7 +2,7 @@ function generate_maps_and_psf(varargin)
 
     % Validate input arguments
     ip = inputParser;
-    addOptional(ip, 'file_name', "training_data.h5", @isstring);
+    addOptional(ip, 'file_name', "training_data_512x512.h5", @isstring);
     addOptional(ip, 'generated_maps_number', 10, @isnumeric);
     parse(ip, varargin{:});   
     
@@ -11,6 +11,8 @@ function generate_maps_and_psf(varargin)
 
     addpath source
     
+    wb = waitbar(0, 'Starting');
+
     for map_index = 1:generated_maps_number
         % Define external boundry
         boundry = [3 4 0 1 1 0 0 0 1 1]';
@@ -26,19 +28,26 @@ function generate_maps_and_psf(varargin)
         end
         
         % Generate h, dhx and dhy
-        [h, dhdx, dhdy] = GeneratePoissonSafetyFunction(boundry, objects_list);
+        [h, dhdx, dhdy, grid] = GeneratePoissonSafetyFunction(boundry, objects_list);
     
         % Write data
         index_string = sprintf('%06d', map_index);
         
-        h5create(file_name, "/h/" + index_string, size(h), 'Datatype', 'double');
-        h5write(file_name, "/h/" + index_string, h);
+        h5create(file_name, "/grid/" + index_string, size(grid), 'Datatype', 'uint8');
+        h5write(file_name, "/grid/" + index_string, uint8(grid));
+
+        h5create(file_name, "/h/" + index_string, size(h), 'Datatype', 'single');
+        h5write(file_name, "/h/" + index_string, single(h));
         
-        h5create(file_name, "/dhdx/" + index_string, size(dhdx), 'Datatype', 'double');
-        h5write(file_name, "/dhdx/" + index_string, dhdx);
+        h5create(file_name, "/dhdx/" + index_string, size(dhdx), 'Datatype', 'single');
+        h5write(file_name, "/dhdx/" + index_string, single(dhdx));
     
-        h5create(file_name, "/dhdy/" + index_string, size(dhdy), 'Datatype', 'double');
-        h5write(file_name, "/dhdy/" + index_string, dhdy);
+        h5create(file_name, "/dhdy/" + index_string, size(dhdy), 'Datatype', 'single');
+        h5write(file_name, "/dhdy/" + index_string, single(dhdy));
+
+        waitbar(map_index / generated_maps_number, ...
+            wb, ...
+            sprintf('Progress: %d %%', floor(map_index / generated_maps_number * 100)));
     end
 
 end
