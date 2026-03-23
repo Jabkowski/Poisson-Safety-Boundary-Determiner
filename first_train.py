@@ -59,6 +59,11 @@ def gradient_loss(h):
     dy = h[:, :, 1:, :] - h[:, :, :-1, :]
     return dx.abs().mean() + dy.abs().mean()
 
+def gradients(h):
+    dhdx = h[:, :, :, 1:] - h[:, :, :, :-1]
+    dhdy = h[:, :, 1:, :] - h[:, :, :-1, :]
+    return dhdx, dhdy
+
 def boundary_loss(pred, true):
     return (
         (pred[:, :, 0, :] - true[:, :, 0, :]).abs().mean() +
@@ -75,7 +80,7 @@ criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 #load data from h5 file
-with h5py.File("data/grids_data.h5", "r") as f:
+with h5py.File("data/grids_data_512x512.h5", "r") as f:
     parse_tree(f)
 
 
@@ -121,7 +126,7 @@ test_loader = dl(
 print(train_loader.__len__())
 print(test_loader.__len__())
 
-epochs = 20
+epochs = 5
 
 for epoch in range(epochs):
     model.train()
@@ -130,8 +135,8 @@ for epoch in range(epochs):
     pbar = tqdm(train_loader, desc="Training", leave=False)
     for grid, h_true in pbar:
         
-        grid = pad_to_512(grid)
-        h_true = pad_to_512(h_true)
+        # grid = pad_to_512(grid)
+        # h_true = pad_to_512(h_true)
 
         grid = grid.to(device)
         h_true = h_true.to(device)
@@ -139,8 +144,8 @@ for epoch in range(epochs):
         optimizer.zero_grad()
 
         h_pred = model(grid)
-        h_pred = crop_to_500(h_pred)
-        h_true = crop_to_500(h_true)
+        # h_pred = crop_to_500(h_pred)
+        # h_true = crop_to_500(h_true)
 
         mse = criterion(h_pred, h_true)
         smooth = gradient_loss(h_pred)
@@ -162,16 +167,16 @@ i = 0
 with torch.no_grad():
     for grid, h_true in pbar:
 
-        grid = pad_to_512(grid)
-        h_true = pad_to_512(h_true)
+        # grid = pad_to_512(grid)
+        # h_true = pad_to_512(h_true)
         
         grid = grid.to(device)
         h_true = h_true.to(device)
 
         h_pred = model(grid)
 
-        h_pred = crop_to_500(h_pred)
-        h_true = crop_to_500(h_true)
+        # h_pred = crop_to_500(h_pred)
+        # h_true = crop_to_500(h_true)
 
         loss = criterion(h_pred, h_true)
         test_loss += loss.item()
@@ -192,4 +197,4 @@ with torch.no_grad():
 test_loss /= len(test_loader)
 print("Test MSE:", test_loss)
 
-torch.save(model.state_dict(), "weights/unetbilinear_model.pth")
+torch.save(model.state_dict(), "weights/unetbilinear_model_e5.pth")
