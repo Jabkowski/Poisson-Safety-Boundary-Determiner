@@ -40,24 +40,22 @@ def parse_tree(obj, indent=0, current=None):
             current[key] = np.asarray(item[()])
 
 class GridDataset(Dataset):
-    def __init__(self, grids, h):
-        """
-        grids: Tensor (N, 1, H, W)
-        h:     Tensor (N, 1, H, W)
-        """
+    def __init__(self, grids, h, dhdx, dhdy):
         self.grids = grids
         self.h = h
+        self.dhdx = dhdx
+        self.dhdy = dhdy
 
     def __len__(self):
         return self.grids.shape[0]
 
     def __getitem__(self, idx):
-        return self.grids[idx], self.h[idx]
-
-def gradient_loss(h):
-    dx = h[:, :, :, 1:] - h[:, :, :, :-1]
-    dy = h[:, :, 1:, :] - h[:, :, :-1, :]
-    return dx.abs().mean() + dy.abs().mean()
+        return (
+            self.grids[idx],
+            self.h[idx],
+            self.dhdx[idx],
+            self.dhdy[idx]
+        )
 
 def gradients(h):
     dhdx = h[:, :, :, 1:] - h[:, :, :, :-1]
@@ -87,30 +85,55 @@ with h5py.File("data/grids_data_512x512.h5", "r") as f:
 # Prepare data
 grids = data["grid"]
 h     = data["h"]
+dhdx  = data["dhdx"]
+dhdy  = data["dhdy"]
 
 keys = sorted(grids.keys())
+
+dhdx_arr = np.stack([dhdx[k] for k in keys])
+dhdy_arr = np.stack([dhdy[k] for k in keys])
+
+dhdx_arr = dhdx_arr[:, None, :, :]  # (N, 1, H, W)
+dhdy_arr = dhdy_arr[:, None, :, :]
 
 grids_x = np.stack([grids[k] for k in keys])
 Y = np.stack([h[k] for k in keys])
 
-grids_x = grids_x[:, None, :, :]  # (N, 1, 500, 500)
+grids_x = grids_x[:, None, :, :]  # (N, 1, 512, 512)
 Y = Y[:, None, :, :]
 grids = torch.from_numpy(grids_x).float()
 h     = torch.from_numpy(Y).float()
 
+## Train-test split
+
+grids_train, grids_test, \
+h_train, h_test, \
+dhdx_train, dhdx_test, \
+dhdy_train, dhdy_test = train_test_split(
+    grids, h, dhdx_arr, dhdy_arr,
+    test_size=0.2,
+    random_state=42
+)
+
+dx = 1.0 / (grids.shape[-1] - 1)
+dhdx_train *= dx
+dhdx_test  *= dx
+dhdy_train *= dx
+dhdy_test  *= dx
 # normalize h only
 h_mean = h.mean()
 h_std  = h.std() + 1e-8
-h = (h - h_mean) / h_std
+h_train = (h_train - h_mean) / h_std
+h_test  = (h_test  - h_mean) / h_std
 
-## Train-test split
+dhdx_train = dhdx_train / h_std
+dhdx_test  = dhdx_test  / h_std
 
-grids_train, grids_test, h_train, h_test = train_test_split(
-    grids, h, test_size=0.2, random_state=42
-)
+dhdy_train = dhdy_train / h_std
+dhdy_test  = dhdy_test  / h_std
 
-train_dataset = GridDataset(grids_train, h_train)
-test_dataset  = GridDataset(grids_test,  h_test)
+train_dataset = GridDataset(grids_train, h_train, dhdx_train, dhdy_train)
+test_dataset  = GridDataset(grids_test,  h_test,  dhdx_test,  dhdy_test)
 
 train_loader = dl(
     train_dataset,
@@ -126,31 +149,36 @@ test_loader = dl(
 print(train_loader.__len__())
 print(test_loader.__len__())
 
-epochs = 5
+epochs = 40
+
+print("h:", h_train.min().item(), h_train.max().item())
+print("dhdx:", dhdx_train.min().item(), dhdx_train.max().item())
+print("dhdy:", dhdy_train.min().item(), dhdy_train.max().item())
 
 for epoch in range(epochs):
     model.train()
     running_loss = 0.0
 
     pbar = tqdm(train_loader, desc="Training", leave=False)
-    for grid, h_true in pbar:
-        
-        # grid = pad_to_512(grid)
-        # h_true = pad_to_512(h_true)
+    for grid, h_true, dhdx_true, dhdy_true in pbar:
 
         grid = grid.to(device)
         h_true = h_true.to(device)
+        dhdx_true = dhdx_true.to(device)
+        dhdy_true = dhdy_true.to(device)
 
         optimizer.zero_grad()
 
         h_pred = model(grid)
-        # h_pred = crop_to_500(h_pred)
-        # h_true = crop_to_500(h_true)
 
         mse = criterion(h_pred, h_true)
-        smooth = gradient_loss(h_pred)
-
-        loss = mse + 0.05 * smooth + 0.1 * boundary_loss(h_pred, h_true)
+        dhdx_pred, dhdy_pred = gradients(h_pred)
+        loss_grad = (
+            F.mse_loss(dhdx_pred, dhdx_true[:, :, :, :-1]) +
+            F.mse_loss(dhdy_pred, dhdy_true[:, :, :-1, :])
+        )
+        loss_bc = boundary_loss(h_pred, h_true)
+        loss = mse + 0.5 * loss_grad + 0.1 * loss_bc
         loss.backward()
         optimizer.step()
 
@@ -165,18 +193,12 @@ test_loss = 0.0
 pbar = tqdm(test_loader, desc="Testing", leave=False)
 i = 0
 with torch.no_grad():
-    for grid, h_true in pbar:
-
-        # grid = pad_to_512(grid)
-        # h_true = pad_to_512(h_true)
+    for grid, h_true, dhdx_true, dhdy_true in pbar:
         
         grid = grid.to(device)
         h_true = h_true.to(device)
 
         h_pred = model(grid)
-
-        # h_pred = crop_to_500(h_pred)
-        # h_true = crop_to_500(h_true)
 
         loss = criterion(h_pred, h_true)
         test_loss += loss.item()
@@ -197,4 +219,4 @@ with torch.no_grad():
 test_loss /= len(test_loader)
 print("Test MSE:", test_loss)
 
-torch.save(model.state_dict(), "weights/unetbilinear_model_e5.pth")
+torch.save(model.state_dict(), "weights/grads_loss_unetbilinear_model_e2.pth")
