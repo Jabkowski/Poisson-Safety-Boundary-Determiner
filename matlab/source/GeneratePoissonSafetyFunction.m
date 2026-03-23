@@ -1,4 +1,4 @@
-function [h, dhdx, dhdy] = GeneratePoissonSafetyFunction(boundry, objects_list)
+function [h, dhdx, dhdy, grid] = GeneratePoissonSafetyFunction(boundry, objects_list)
     %% Define boundries
     gd = boundry; % external boundry
     sf = "R1";
@@ -104,8 +104,9 @@ function [h, dhdx, dhdy] = GeneratePoissonSafetyFunction(boundry, objects_list)
     y = p(2, :)';
     
     % Set grid
-    nx = 500;
-    ny = 500;
+    n = 512;
+    nx = n;
+    ny = n;
     xq = linspace(min(x), max(x), nx);
     yq = linspace(min(y), max(y), ny);
     [Xq, Yq] = meshgrid(xq, yq);
@@ -119,6 +120,7 @@ function [h, dhdx, dhdy] = GeneratePoissonSafetyFunction(boundry, objects_list)
     h(isnan(h)) = 0;
     dhdx(isnan(dhdx)) = 0;
     dhdy(isnan(dhdy)) = 0;
+    grid = h > 0;
 end
 
 
