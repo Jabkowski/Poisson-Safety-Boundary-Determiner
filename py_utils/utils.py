@@ -49,7 +49,7 @@ def load_h5_to_torch(h5_path):
 
     return grids, h
 
-def plot_validation_results(h_pred, h_true, epoch_label="", save_plot=False):
+def plot_validation_results(h_pred, h_true, epoch_label="", save_plot=False, i=0):
     h_pred = h_pred.cpu().numpy()
     h_true = h_true.cpu().numpy()
 

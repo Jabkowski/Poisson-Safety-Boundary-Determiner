@@ -33,7 +33,7 @@ def TrainModel(model, train_loader, criterion, device):
 
     print(f"Epoch {epoch+1}, Loss: {running_loss / len(train_loader):.6f}")
 
-def ValidateModel(model, test_loader, criterion, h_std, h_mean, device, epoch_label="loaded"):
+def ValidateModel(model, test_loader, criterion, h_std, h_mean, device, epoch_label="loaded", save_plot=False):
     model.eval()   # disables dropout, batchnorm
     test_loss = 0.0
 
@@ -50,14 +50,14 @@ def ValidateModel(model, test_loader, criterion, h_std, h_mean, device, epoch_la
             print(f"mse: {mse.item():.6f}, grad_loss: {loss_grad.item():.6f}, bc_loss: {loss_bc.item():.6f})")
             test_loss += mse.item()
             pbar.set_postfix(loss=mse.item())
-            if i < 5:  # plot first 5 results
-                plot_validation_results(h_pred, h_true, epoch_label, save_plot=False)
+            plot_validation_results(h_pred, h_true, epoch_label, save_plot=save_plot, i=i)
+            i+=1
 
     test_loss /= len(test_loader)
     print("Test MSE:", test_loss)
 
 
-WEIGHTS_PATH = "weights/grads_loss_v3_unetbilinear_model_e5.pth"
+WEIGHTS_PATH = "weights/grads_loss_v3_unetbilinear_model_e20.pth"
 
 data = {}
 
@@ -111,7 +111,7 @@ if load_existing_weights and os.path.isfile(WEIGHTS_PATH):
 
 else:
 
-    epochs = 5
+    epochs = 20
 
     print("h:", h_train.min().item(), h_train.max().item())
     for epoch in range(epochs):
