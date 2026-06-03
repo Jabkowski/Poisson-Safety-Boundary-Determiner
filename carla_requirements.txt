@@ -1,0 +1,18 @@
+## CARLA DEP
+future
+numpy<2.0.0
+networkx
+Shapely
+pygame
+matplotlib
+open3d
+Pillow
+auditwheel==5.1.0
+build
+distro==1.9.0
+packaging
+pyelftools
+setuptools
+wheel
+carla==0.9.16
+h5py
