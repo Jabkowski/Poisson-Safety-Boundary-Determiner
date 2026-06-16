@@ -14,5 +14,5 @@ def print_tree(obj, indent=0):
             )
 
 
-with h5py.File("matlab/training_data.h5", "r") as f:
+with h5py.File("matlab/grids_data_512x512.h5", "r") as f:
     print_tree(f)
