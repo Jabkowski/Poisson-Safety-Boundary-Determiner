@@ -219,3 +219,69 @@ class UNetBilinearLite(nn.Module):
         u1 = self.conv1(torch.cat([u1, d1], dim=1))
 
         return self.out(u1)
+
+
+class UNetTranspose(nn.Module):
+    """
+    Improved UNet using transpose convolutions instead of bilinear upsampling.
+    This reduces cross artifacts and learns smoother gradients.
+    Higher channel capacity for better feature learning.
+    """
+    def __init__(self, in_channels=1, out_channels=1):
+        super().__init__()
+
+        # Encoder with higher capacity
+        self.down1 = DoubleConvBi(in_channels, 64)
+        self.down2 = DoubleConvBi(64, 128)
+        self.down3 = DoubleConvBi(128, 256)
+        self.down4 = DoubleConvBi(256, 512)
+
+        self.pool = nn.MaxPool2d(2)
+
+        # Bottleneck
+        self.middle = DoubleConvBi(512, 1024)
+
+        # Decoder with transpose convolutions (learnable upsampling)
+        self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
+        self.conv4 = DoubleConvBi(512 + 512, 512)
+
+        self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.conv3 = DoubleConvBi(256 + 256, 256)
+
+        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.conv2 = DoubleConvBi(128 + 128, 128)
+
+        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.conv1 = DoubleConvBi(64 + 64, 64)
+
+        # Output
+        self.out = nn.Conv2d(64, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        # Encoder
+        d1 = self.down1(x)              # 512
+        d2 = self.down2(self.pool(d1))  # 256
+        d3 = self.down3(self.pool(d2))  # 128
+        d4 = self.down4(self.pool(d3))  # 64
+
+        # Bottleneck
+        m = self.middle(self.pool(d4))  # 32
+
+        # Decoder
+        u4 = self.up4(m)
+        u4 = torch.cat([u4, d4], dim=1)
+        u4 = self.conv4(u4)
+
+        u3 = self.up3(u4)
+        u3 = torch.cat([u3, d3], dim=1)
+        u3 = self.conv3(u3)
+
+        u2 = self.up2(u3)
+        u2 = torch.cat([u2, d2], dim=1)
+        u2 = self.conv2(u2)
+
+        u1 = self.up1(u2)
+        u1 = torch.cat([u1, d1], dim=1)
+        u1 = self.conv1(u1)
+
+        return self.out(u1)

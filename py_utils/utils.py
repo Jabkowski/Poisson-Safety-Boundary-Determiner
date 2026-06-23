@@ -4,30 +4,46 @@ import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
+import os
 
 
 def gradients(h):
+    """Compute first-order gradients (dx, dy)"""
     dhdx = h[:, :, :, 1:] - h[:, :, :, :-1]
     dhdy = h[:, :, 1:, :] - h[:, :, :-1, :]
     return dhdx, dhdy
 
 
+def laplacian_loss(h):
+    """
+    Compute Laplacian (2nd derivative) to encourage smoothness.
+    Higher weight for second-order derivatives means smoother predictions.
+    """
+    # Compute second derivatives
+    d2hdx2 = h[:, :, :, :-2] - 2*h[:, :, :, 1:-1] + h[:, :, :, 2:]
+    d2hdy2 = h[:, :, :-2, :] - 2*h[:, :, 1:-1, :] + h[:, :, 2:, :]
+    
+    # Average absolute second derivatives
+    lap_loss = d2hdx2.abs().mean() + d2hdy2.abs().mean()
+    return lap_loss
+
+
 def calc_grad_loss(criterion, h_pred, h_true):
     mse = criterion(h_pred, h_true)
+    
     # --- gradients (computed consistently!) ---
     dhdx_pred, dhdy_pred = gradients(h_pred)
     dhdx_true, dhdy_true = gradients(h_true)
 
     loss_grad = F.mse_loss(dhdx_pred, dhdx_true) + F.mse_loss(dhdy_pred, dhdy_true)
+    
+    # --- second-order smoothness (Laplacian) ---
+    loss_laplacian = laplacian_loss(h_pred)
+    
     # --- boundary ---
     loss_bc = boundary_loss(h_pred, h_true)
-    # # --- smoothness ---
-    # loss_smooth = dhdx_pred.abs().mean() + dhdy_pred.abs().mean()
 
-    ## multiply gradd loss by a factor to balance with mse
-    loss_grad = 30.0 * loss_grad
-
-    return mse, loss_grad, loss_bc
+    return mse, 50*loss_grad + 50*loss_laplacian, loss_bc
 
 
 def load_grid_h5_to_torch(h5_path):
@@ -41,12 +57,55 @@ def load_grid_h5_to_torch(h5_path):
         return grids
 
 
-def load_h5_to_torch(h5_path):
-    with h5py.File(h5_path, "r") as f:
+def parse_h5_file(h5_file_path):
+    with h5py.File(h5_file_path, "r") as f:
         data = parse_tree(f)
 
     grids = data["grid"]
     h = data["h"]
+    return grids, h
+
+def append_new_file_to_end_of_dict(existing_dict, new_dict):
+    """
+    existing_dict: dict with keys like ''000001', '000002'
+    new_dict: dict with keys like '000001', '000002'
+    returns: dict with keys like '000001', '000002', '000003', '000004' where the new_dict keys are appended to the end of existing_dict keys
+    """
+    existing_keys = sorted(existing_dict.keys())
+    new_keys = sorted(new_dict.keys())
+
+    if not existing_keys:
+        return new_dict
+
+    last_existing_key = existing_keys[-1]
+    last_existing_num = int(last_existing_key)
+
+    updated_dict = existing_dict.copy()
+    for i, new_key in enumerate(new_keys):
+        new_num = last_existing_num + i + 1
+        updated_dict[f"{new_num:06d}"] = new_dict[new_key]
+
+    return updated_dict
+
+def load_h5_to_torch(h5_path):
+    grids, h = {}, {}
+    if os.path.isdir(h5_path):
+        # create list of .h5 files in the directory
+        h5_files = [f for f in os.listdir(h5_path) if f.endswith(".h5")]
+        if not h5_files:
+            raise ValueError(f"No .h5 files found in directory: {h5_path}")
+        # parse each file and update the grids and h dicts
+        for h5_file in h5_files:
+            file_path = os.path.join(h5_path, h5_file)
+            one_file_grids, one_file_h = parse_h5_file(file_path)
+            if not grids or not h:
+                grids = one_file_grids
+                h = one_file_h
+            else:
+                grids = append_new_file_to_end_of_dict(grids, one_file_grids)
+                h = append_new_file_to_end_of_dict(h, one_file_h)
+    else:
+        grids, h = parse_h5_file(h5_path)
 
     keys = sorted(grids.keys())
 
