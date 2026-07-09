@@ -59,3 +59,7 @@ Error in javaclasspath
 Error in javaaddpath (line 69)
 
 MATLAB:Java:GenericException
+
+## PINN
+
+![Example](fig/pinn_output.png)
