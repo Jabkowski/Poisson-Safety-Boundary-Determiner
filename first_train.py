@@ -26,7 +26,9 @@ def TrainModel(model, train_loader, criterion, device):
         optimizer.zero_grad()
 
         h_pred = model(grid)
-        mse, loss_grad, loss_bc = calc_grad_loss(criterion, h_pred, h_true)
+        mse, loss_grad, loss_bc = calc_grad_loss(
+            criterion, h_pred, h_true
+        )
 
         # --- final ---
         loss = mse + loss_grad + 0.01 * loss_bc
@@ -36,7 +38,9 @@ def TrainModel(model, train_loader, criterion, device):
         running_loss += loss.item()
         pbar.set_postfix(loss=loss.item())
 
-    print(f"Epoch {epoch + 1}, Loss: {running_loss / len(train_loader):.6f}")
+    print(
+        f"Epoch {epoch + 1}, Loss: {running_loss / len(train_loader):.6f}"
+    )
 
 
 def ValidateModel(
@@ -61,7 +65,9 @@ def ValidateModel(
 
             h_pred = model(grid)
 
-            mse, loss_grad, loss_bc = calc_grad_loss(criterion, h_pred, h_true)
+            mse, loss_grad, loss_bc = calc_grad_loss(
+                criterion, h_pred, h_true
+            )
             print(
                 f"mse: {mse.item():.6f}, grad_loss: {loss_grad.item():.6f}, bc_loss: {loss_bc.item():.6f})"
             )
@@ -78,7 +84,9 @@ def ValidateModel(
 
 epochs = 15
 batch_size = 4
-WEIGHTS_PATH = f"weights/grads_loss_v3_unetbilinear_model_e{epochs}.pth"
+WEIGHTS_PATH = (
+    f"weights/grads_loss_v3_unetbilinear_model_e{epochs}.pth"
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,7 +96,7 @@ criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # load data from h5 file
-grids, h = load_h5_to_torch("data/grids_data_512x512.h5")
+grids, h = load_h5_to_torch("td.h5")
 
 ## Train-test split
 
@@ -115,7 +123,9 @@ print(test_loader.__len__())
 load_existing_weights = True
 
 if load_existing_weights and os.path.isfile(WEIGHTS_PATH):
-    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
+    model.load_state_dict(
+        torch.load(WEIGHTS_PATH, map_location=device)
+    )
     print(f"Loaded existing model weights from {WEIGHTS_PATH}")
     ValidateModel(
         model,

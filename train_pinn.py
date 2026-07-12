@@ -6,50 +6,52 @@ import matplotlib.pyplot as plt
 import h5py
 import os
 from scipy.ndimage import binary_erosion, label, center_of_mass
+from torch.utils.data import Dataset, DataLoader, random_split
+from tqdm import tqdm
 
 # Ustawienie ziarna losowości dla powtarzalności wyników
 torch.manual_seed(42)
 np.random.seed(42)
 
 
-class DoublePoissonPINN(nn.Module):
-    """
-    PINN (MLP) zawierający DWIE osobne sieci neuronowe:
-    1. u_net: wejście (x, y) -> wyjście (u_x, u_y) [Pole Laplace'a]
-    2. h_net: wejście (x, y) -> wyjście (h)       [Funkcja bezpieczeństwa Poissona]
-    Dzięki temu eliminujemy konflikt gradientów między dwoma różnymi równaniami fizycznymi.
-    """
+# class DoublePoissonPINN(nn.Module):
+#     """
+#     PINN (MLP) zawierający DWIE osobne sieci neuronowe:
+#     1. u_net: wejście (x, y) -> wyjście (u_x, u_y) [Pole Laplace'a]
+#     2. h_net: wejście (x, y) -> wyjście (h)       [Funkcja bezpieczeństwa Poissona]
+#     Dzięki temu eliminujemy konflikt gradientów między dwoma różnymi równaniami fizycznymi.
+#     """
 
-    def __init__(self):
-        super(DoublePoissonPINN, self).__init__()
+#     def __init__(self):
+#         super(DoublePoissonPINN, self).__init__()
 
-        # Sieć dla pola pomocniczego u (rozwiązuje układ Laplace'a)
-        self.u_net = nn.Sequential(
-            nn.Linear(2, 128),
-            nn.Tanh(),
-            nn.Linear(128, 128),
-            nn.Tanh(),
-            nn.Linear(128, 128),
-            nn.Tanh(),
-            nn.Linear(128, 2),  # Wyjścia: u_x, u_y
-        )
+#         # Sieć dla pola pomocniczego u (rozwiązuje układ Laplace'a)
+#         self.u_net = nn.Sequential(
+#             nn.Linear(2, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 2),  # Wyjścia: u_x, u_y
+#         )
 
-        # Sieć dla funkcji bezpieczeństwa h (rozwiązuje równanie Poissona)
-        self.h_net = nn.Sequential(
-            nn.Linear(2, 128),
-            nn.Tanh(),
-            nn.Linear(128, 128),
-            nn.Tanh(),
-            nn.Linear(128, 128),
-            nn.Tanh(),
-            nn.Linear(128, 1),  # Wyjście: h
-        )
+#         # Sieć dla funkcji bezpieczeństwa h (rozwiązuje równanie Poissona)
+#         self.h_net = nn.Sequential(
+#             nn.Linear(2, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 128),
+#             nn.Tanh(),
+#             nn.Linear(128, 1),  # Wyjście: h
+#         )
 
-    def forward(self, x):
-        """Zwraca spójny tensor 3-kanałowy [u_x, u_y, h] dla wstecznej kompatybilności"""
-        u = self.u_net(x)
-        h = self.h_net(x)
-        return torch.cat([u, h], dim=1)
+#     def forward(self, x):
+#         """Zwraca spójny tensor 3-kanałowy [u_x, u_y, h] dla wstecznej kompatybilności"""
+#         u = self.u_net(x)
+#         h = self.h_net(x)
+#         return torch.cat([u, h], dim=1)
 
 
 class DoubleConv(nn.Module):
@@ -127,15 +129,80 @@ class UNetDoublePoisson(nn.Module):
     def __init__(self):
         super(UNetDoublePoisson, self).__init__()
         self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
-        self.h_net = UNetSubNetwork(in_channels=1, out_channels=1)
+        self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
 
     def forward(self, x):
         u = self.u_net(x)
-        h = self.h_net(x)
+        h = self.h_net(u)
         return torch.cat([u, h], dim=1)
 
 
-def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 512.0):
+class H5PoissonDataset(Dataset):
+    """
+    Klasa Dataset wczytująca wszystkie wygenerowane mapy i powiązane rozkłady h
+    z pliku HDF5 bezpośrednio do pamięci RAM, dla maksymalnej wydajności i stabilności na GPU.
+    """
+
+    def __init__(self, file_path):
+        self.grids = []
+        self.h_values = []
+        self.dhdx_values = []
+        self.dhdy_values = []
+        self.ux_values = []
+        self.uy_values = []
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(
+                f"Nie znaleziono pliku bazy danych: {file_path}"
+            )
+
+        print(f"Ładowanie zestawu danych z pliku: {file_path}...")
+        with h5py.File(file_path, "r") as f:
+            # Sortujemy klucze (indeksy map) dla zachowania spójności
+            keys = sorted(list(f["grid"].keys()))
+            for key in tqdm(keys, desc="Wczytywanie map"):
+                # Obrazy w bazie są zapisane jako [1, H, W]
+                grid_data = f["grid"][key][:]
+                h_data = f["h"][key][:]
+                dhdx_data = f["dhdx"][key][:]
+                dhdy_data = f["dhdy"][key][:]
+                ux_data = f["u_x"][key][:]
+                uy_data = f["u_y"][key][:]
+
+                self.grids.append(
+                    torch.tensor(grid_data, dtype=torch.float32)
+                )
+                self.h_values.append(
+                    torch.tensor(h_data, dtype=torch.float32)
+                )
+                self.dhdx_values.append(
+                    torch.tensor(dhdx_data, dtype=torch.float32)
+                )
+                self.dhdy_values.append(
+                    torch.tensor(dhdy_data, dtype=torch.float32)
+                )
+                self.ux_values.append(
+                    -torch.tensor(ux_data, dtype=torch.float32)
+                )
+                self.uy_values.append(
+                    -torch.tensor(uy_data, dtype=torch.float32)
+                )
+
+    def __len__(self):
+        return len(self.grids)
+
+    def __getitem__(self, idx):
+        return (
+            self.grids[idx],
+            self.h_values[idx],
+            self.dhdx_values[idx],
+            self.dhdy_values[idx],
+            self.ux_values[idx],
+            self.uy_values[idx],
+        )
+
+
+def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
     """
     Dla każdej siatki zajętości w pacce (Batch) wykrywa spójne przeszkody,
     oblicza ich środki ciężkości i tworzy docelowy tensor u_target na krawędziach przeszkód.
@@ -193,12 +260,20 @@ def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 512.0):
 
 
 def calc_poisson_pinn_loss(
-    pred_3ch, grid, dx=10.0 / 512.0, detach_u=True
+    pred_3ch,
+    h_true,
+    dhdx_true,
+    dhdy_true,
+    ux_true,
+    uy_true,
+    grid,
+    dx=10.0 / 128.0,
+    detach_u=True,
 ):
     """
-    Oblicza fizyczny błąd PDE (Physics-Informed Loss) przy użyciu splotów 2D.
-    detach_u=True pozwala na zablokowanie przepływu gradientów z równania Poissona (h)
-    do sieci generującej u, co zapobiega zniekształceniom pola u.
+    Oblicza fizyczny błąd PDE (Physics-Informed Loss) przy użyciu splotów 2D dla paczki (Batch).
+    detach_u=True blokuje przepływ wsteczny gradientów h do podsieci pola pomocniczego u.
+    Używa skończonych różnic (filtry Sobela, Laplacjan) zamiast autograd dla stabilności.
     """
     device = pred_3ch.device
 
@@ -227,6 +302,9 @@ def calc_poisson_pinn_loss(
     dux_dy = F.conv2d(u_x, sobel_y, padding=1)
     duy_dx = F.conv2d(u_y, sobel_x, padding=1)
     duy_dy = F.conv2d(u_y, sobel_y, padding=1)
+
+    dh_dx = F.conv2d(h, sobel_x, padding=1)
+    dh_dy = F.conv2d(h, sobel_y, padding=1)
 
     # Filtr Laplasjanu do obliczenia drugich pochodnych
     lap_kernel = torch.tensor(
@@ -266,210 +344,102 @@ def calc_poisson_pinn_loss(
 
     bc_loss = loss_bc_h + loss_bc_h_outer + loss_bc_u
 
-    return pde_loss, bc_loss, dux_dx, dux_dy
+    # 3. Strata danych dla h i jego pochodnych
+    loss_h_data = F.mse_loss(h, h_true)
+    loss_dhdx_data = F.mse_loss(dh_dx, dhdx_true)
+    loss_dhdy_data = F.mse_loss(dh_dy, dhdy_true)
+    loss_ux_data = F.mse_loss(u_x, ux_true)
+    loss_uy_data = F.mse_loss(u_y, uy_true)
 
-
-def load_grid_from_h5(file_path, map_index=1):
-    """Wczytuje konkretną siatkę zajętości z pliku wygenerowanego przez generator H5."""
-    index_string = f"{map_index:06d}"
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(
-            f"Nie znaleziono pliku bazy danych: {file_path}. Wygeneruj go najpierw."
-        )
-
-    with h5py.File(file_path, "r") as f:
-        grid = np.array(
-            f["grid"][index_string], dtype=np.uint8
-        ).squeeze()
-    return grid
-
-
-def generate_pinn_data_from_grid(grid):
-    """Ekstrahuje punkty treningowe bezpośrednio z wczytanej siatki zajętości."""
-    resolution = grid.shape[0]
-
-    def to_world_coords(row, col):
-        x = -5.0 + (col / (resolution - 1)) * 10.0
-        y = -5.0 + (row / (resolution - 1)) * 10.0
-        return x, y
-
-    # Wykrywanie krawędzi przeszkód za pomocą morfologii
-    eroded_grid = binary_erosion(grid)
-    boundary_grid = grid ^ eroded_grid
-
-    # Segmentacja przeszkód i wyznaczenie ich środków ciężkości
-    labeled_array, num_features = label(grid)
-    centers = {}
-    for i in range(1, num_features + 1):
-        row_c, col_c = center_of_mass(labeled_array == i)
-        centers[i] = to_world_coords(row_c, col_c)
-
-    # Przygotowanie punktów brzegowych i warunków Dirichleta dla pola u
-    boundary_rows, boundary_cols = np.where(boundary_grid == 1)
-    X_bc_list = []
-    U_bc_list = []
-    scale_c = 1.0
-
-    for r, c in zip(boundary_rows, boundary_cols):
-        wx, wy = to_world_coords(r, c)
-        obstacle_id = labeled_array[r, c]
-        cx, cy = centers[obstacle_id]
-
-        u_val_x = scale_c * (wx - cx)
-        u_val_y = scale_c * (wy - cy)
-
-        X_bc_list.append([wx, wy])
-        U_bc_list.append([u_val_x, u_val_y])
-
-    X_bc = np.array(X_bc_list)
-    U_bc = np.array(U_bc_list)
-
-    # Losowanie punktów kolokacji we wnętrzu wolnej przestrzeni (grid == 0)
-    raw_points = np.random.uniform(-5.0, 5.0, (15000, 2))
-    valid_pde_points = []
-    for pt in raw_points:
-        col_idx = int((pt[0] + 5.0) / 10.0 * (resolution - 1))
-        row_idx = int((pt[1] + 5.0) / 10.0 * (resolution - 1))
-        col_idx = np.clip(col_idx, 0, resolution - 1)
-        row_idx = np.clip(row_idx, 0, resolution - 1)
-
-        if grid[row_idx, col_idx] == 0:
-            valid_pde_points.append(pt)
-
-    X_pde = np.array(valid_pde_points)
-
-    # Punkty zewnętrznych ścian obszaru roboczego (wymuszamy h = 0 na krawędziach świata)
-    s = np.linspace(-5.0, 5.0, 200)
-    top = np.stack([s, np.full_like(s, 5.0)], axis=1)
-    bottom = np.stack([s, np.full_like(s, -5.0)], axis=1)
-    left = np.stack([np.full_like(s, -5.0), s], axis=1)
-    right = np.stack([np.full_like(s, 5.0), s], axis=1)
-    X_outer = np.vstack([top, bottom, left, right])
-
-    X_pde_tensor = torch.tensor(
-        X_pde, dtype=torch.float32, requires_grad=True
-    )
-    X_bc_tensor = torch.tensor(X_bc, dtype=torch.float32)
-    U_bc_tensor = torch.tensor(U_bc, dtype=torch.float32)
-    X_outer_tensor = torch.tensor(X_outer, dtype=torch.float32)
-
-    return (
-        X_pde_tensor,
-        X_bc_tensor,
-        U_bc_tensor,
-        X_outer_tensor,
-        grid,
+    value_data_loss = (
+        loss_h_data
+        + loss_dhdx_data
+        + loss_dhdy_data
+        + loss_ux_data
+        + loss_uy_data
     )
 
+    return pde_loss, value_data_loss, bc_loss, dux_dx, dux_dy
 
-def compute_joint_pde_residuals(model, x_pde, detach_u=True):
-    """
-    Oblicza błędy residualne przy użyciu Autogradu w jednym kroku.
-    Używa dwóch osobnych podsieci wewnątrz modelu.
-    """
-    # Predykcja pola u z sieci u_net
-    u_out = model.u_net(x_pde)
-    u_x = u_out[:, 0:1]
-    u_y = u_out[:, 1:2]
 
-    # Obliczamy gradienty u_x i u_y na potrzeby równania Laplace'a
-    grad_ux = torch.autograd.grad(
-        u_x,
-        x_pde,
-        grad_outputs=torch.ones_like(u_x),
-        create_graph=True,
-    )[0]
-    dux_dx = grad_ux[:, 0:1]
-    dux_dy = grad_ux[:, 1:2]
+# def calc_poisson_pinn_loss_old(
+#     pred_3ch, grid, dx=10.0 / 128.0, detach_u=True
+# ):
+#     """
+#     Oblicza fizyczny błąd PDE (Physics-Informed Loss) przy użyciu splotów 2D dla paczki (Batch).
+#     detach_u=True blokuje przepływ wsteczny gradientów h do podsieci pola pomocniczego u.
+#     """
+#     device = pred_3ch.device
 
-    grad_uy = torch.autograd.grad(
-        u_y,
-        x_pde,
-        grad_outputs=torch.ones_like(u_y),
-        create_graph=True,
-    )[0]
-    duy_dx = grad_uy[:, 0:1]
-    duy_dy = grad_uy[:, 1:2]
+#     if detach_u:
+#         u_x = pred_3ch[:, 0:1, :, :].detach()
+#         u_y = pred_3ch[:, 1:2, :, :].detach()
+#     else:
+#         u_x = pred_3ch[:, 0:1, :, :]
+#         u_y = pred_3ch[:, 1:2, :, :]
 
-    # Obliczamy drugie pochodne dla Laplace'a
-    dux_dxx = torch.autograd.grad(
-        dux_dx,
-        x_pde,
-        grad_outputs=torch.ones_like(dux_dx),
-        create_graph=True,
-    )[0][:, 0:1]
-    dux_dyy = torch.autograd.grad(
-        dux_dy,
-        x_pde,
-        grad_outputs=torch.ones_like(dux_dy),
-        create_graph=True,
-    )[0][:, 1:2]
-    laplacian_ux = dux_dxx + dux_dyy
+#     h = pred_3ch[:, 2:3, :, :]
 
-    duy_dxx = torch.autograd.grad(
-        duy_dx,
-        x_pde,
-        grad_outputs=torch.ones_like(duy_dx),
-        create_graph=True,
-    )[0][:, 0:1]
-    duy_dyy = torch.autograd.grad(
-        duy_dy,
-        x_pde,
-        grad_outputs=torch.ones_like(duy_dy),
-        create_graph=True,
-    )[0][:, 1:2]
-    laplacian_uy = duy_dxx + duy_dyy
+#     # Filtry Sobela do wyznaczania pierwszych pochodnych (gradientów)
+#     sobel_x = torch.tensor(
+#         [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
+#         dtype=torch.float32,
+#         device=device,
+#     ).view(1, 1, 3, 3) / (8.0 * dx)
+#     sobel_y = torch.tensor(
+#         [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
+#         dtype=torch.float32,
+#         device=device,
+#     ).view(1, 1, 3, 3) / (8.0 * dx)
 
-    # Zapobieganie przepływowi gradientów z h do sieci u_net (jeśli wybrane)
-    if detach_u:
-        dux_dx_h = dux_dx.detach()
-        dux_dy_h = dux_dy.detach()
-        duy_dx_h = duy_dx.detach()
-        duy_dy_h = duy_dy.detach()
-    else:
-        dux_dx_h, dux_dy_h, duy_dx_h, duy_dy_h = (
-            dux_dx,
-            dux_dy,
-            duy_dx,
-            duy_dy,
-        )
+#     dux_dx = F.conv2d(u_x, sobel_x, padding=1)
+#     dux_dy = F.conv2d(u_x, sobel_y, padding=1)
+#     duy_dx = F.conv2d(u_y, sobel_x, padding=1)
+#     duy_dy = F.conv2d(u_y, sobel_y, padding=1)
 
-    # Predykcja pola h z sieci h_net
-    h_val = model.h_net(x_pde)
+#     # Filtr Laplasjanu do obliczenia drugich pochodnych
+#     lap_kernel = torch.tensor(
+#         [[0, 1, 0], [1, -4, 1], [0, 1, 0]],
+#         dtype=torch.float32,
+#         device=device,
+#     ).view(1, 1, 3, 3) / (dx**2)
+#     lap_ux = F.conv2d(u_x, lap_kernel, padding=1)
+#     lap_uy = F.conv2d(u_y, lap_kernel, padding=1)
+#     lap_h = F.conv2d(h, lap_kernel, padding=1)
 
-    grad_h = torch.autograd.grad(
-        h_val,
-        x_pde,
-        grad_outputs=torch.ones_like(h_val),
-        create_graph=True,
-    )[0]
-    dh_dx = grad_h[:, 0:1]
-    dh_dy = grad_h[:, 1:2]
+#     # Norma gradientu pola pomocniczego u (źródło dla równania Poissona)
+#     norm_grad_u = torch.sqrt(
+#         dux_dx**2 + dux_dy**2 + duy_dx**2 + duy_dy**2 + 1e-8
+#     )
 
-    dh_dxx = torch.autograd.grad(
-        dh_dx,
-        x_pde,
-        grad_outputs=torch.ones_like(dh_dx),
-        create_graph=True,
-    )[0][:, 0:1]
-    dh_dyy = torch.autograd.grad(
-        dh_dy,
-        x_pde,
-        grad_outputs=torch.ones_like(dh_dy),
-        create_graph=True,
-    )[0][:, 1:2]
-    lap_h = dh_dxx + dh_dyy
+#     # 1. Strata Równań Różniczkowych (PDE Residual Losses)
+#     loss_laplace = torch.mean(lap_ux**2) + torch.mean(lap_uy**2)
+#     loss_poisson = torch.mean((lap_h + norm_grad_u) ** 2)
+#     pde_loss = loss_laplace + loss_poisson
 
-    norm_grad_u = torch.sqrt(
-        dux_dx_h**2 + dux_dy_h**2 + duy_dx_h**2 + duy_dy_h**2 + 1e-8
-    )
-    pde_res_h = lap_h + norm_grad_u
+#     # 2. Strata Warunków Brzegowych (BC Losses)
+#     loss_bc_h = torch.mean((h * grid.float()) ** 2)
+#     loss_bc_h_outer = (
+#         torch.mean(h[:, :, 0, :] ** 2)
+#         + torch.mean(h[:, :, -1, :] ** 2)
+#         + torch.mean(h[:, :, :, 0] ** 2)
+#         + torch.mean(h[:, :, :, -1] ** 2)
+#     )
 
-    return laplacian_ux, laplacian_uy, pde_res_h
+#     u_targets, boundary_masks = compute_batch_boundary_u_targets(
+#         grid, dx
+#     )
+#     loss_bc_u = torch.mean(
+#         ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks
+#     )
+
+#     bc_loss = loss_bc_h + loss_bc_h_outer + loss_bc_u
+
+#     return pde_loss, bc_loss, dux_dx, dux_dy
 
 
 def predict_safety_with_gradients(model, x, y):
-    """Pozwala na odpytanie sieci h_net o wartość bezpieczeństwa i jej gradienty."""
+    """Pozwala na odpytanie sieci h_net o wartość bezpieczeństwa i jej gradienty (model MLP)."""
     pt_tensor = torch.tensor(
         [[x, y]], dtype=torch.float32, requires_grad=True
     )
@@ -484,134 +454,222 @@ def predict_safety_with_gradients(model, x, y):
     return h_val.item(), dh_dx, dh_dy
 
 
-# --- GŁÓWNA PĘTLA TRENINGOWA DLA POJEDYNCZEJ MAPY ---
+# --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "training_data_512x512.h5"
-    MAP_INDEX_TO_TRAIN = 1
+    H5_FILE_PATH = "training_data_128x128.h5"
+    WEIGHTS_PATH = "weights/double_poisson_unet_model.pth"
 
-    print(
-        f"Wczytywanie mapy zajętości o indeksie {MAP_INDEX_TO_TRAIN} z pliku {H5_FILE_PATH}..."
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
     )
+    print(f"Używane urządzenie: {device}")
+
+    # 1. Weryfikacja pliku z danymi i ładowanie
     try:
-        grid = load_grid_from_h5(H5_FILE_PATH, MAP_INDEX_TO_TRAIN)
+        full_dataset = H5PoissonDataset(H5_FILE_PATH)
     except FileNotFoundError as e:
         print(f"Błąd: {e}")
         print(
-            "Generowanie tymczasowej mapy zastępczej do celów demonstracyjnych..."
+            "Najpierw wygeneruj zestaw danych przy użyciu skryptu generate_maps_and_psf.py!"
         )
-        resolution = 512
-        grid = np.zeros((resolution, resolution), dtype=np.uint8)
-        Y, X = np.ogrid[:resolution, :resolution]
-        dist_from_center = np.sqrt(
-            (X - resolution / 2) ** 2 + (Y - resolution / 2) ** 2
-        )
-        grid[dist_from_center <= resolution * 0.15] = 1
+        exit(1)
 
-    print(
-        "Przetwarzanie geometrii mapy i generowanie punktów kolokacji..."
-    )
-    X_pde, X_bc, U_bc, X_outer, grid = generate_pinn_data_from_grid(
-        grid
+    # 2. Podział na zbiór treningowy i walidacyjny (80% / 20%)
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = random_split(
+        full_dataset, [train_size, val_size]
     )
 
-    # Inicjalizacja naszej nowej podwójnej sieci neuronowej
-    model = DoublePoissonPINN()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    epochs = 2000
-    w_pde_u = 1.0
-    w_pde_h = 1.0
-    w_bc_u = 20.0
-    w_bc_h = 20.0
+    # Batch size ustawiony na 2 ze względu na wysokie zapotrzebowanie RAM/VRAM przy wymiarach 128x128
+    batch_size = 4
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False
+    )
 
     print(
-        f"Rozpoczęcie ciągłego treningu PINN... Punkty krawędziowe: {X_bc.shape[0]}, Punkty kolokacji: {X_pde.shape[0]}"
+        f"Zestaw treningowy: {len(train_dataset)} map | Zestaw walidacyjny: {len(val_dataset)} map"
+    )
+
+    # 3. Inicjalizacja sieci splotowej UNetDoublePoisson i optymalizatora
+    model = UNetDoublePoisson().to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    epochs = 5
+    w_pde = 0.01
+    w_bc = 0.1
+    dx = (
+        10.0 / 128.0
+    )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
+
+    print(
+        "\nRozpoczynanie treningu splotowej sieci UNetDoublePoisson na wszystkich mapach..."
     )
     for epoch in range(epochs):
-        optimizer.zero_grad()
+        model.train()
+        running_loss = 0.0
 
-        # Przejście w przód przez obie podsieci
-        U_bc_pred = model.u_net(X_bc)
-        h_bc_pred = model.h_net(X_bc)
-
-        loss_bc_u = torch.mean((U_bc_pred - U_bc) ** 2)
-        loss_bc_h_obstacles = torch.mean(h_bc_pred**2)
-
-        h_outer_pred = model.h_net(X_outer)
-        loss_bc_h_outer = torch.mean(h_outer_pred**2)
-
-        loss_bc = w_bc_u * loss_bc_u + w_bc_h * (
-            loss_bc_h_obstacles + loss_bc_h_outer
+        pbar = tqdm(
+            train_loader,
+            desc=f"Epoka {epoch + 1:02d}/{epochs:02d}",
+            leave=True,
         )
+        for (
+            grid,
+            h_true,
+            dhdx_true,
+            dhdy_true,
+            ux_true,
+            uy_true,
+        ) in pbar:
+            grid = grid.to(device)
+            h_true = h_true.to(device)
+            dhdx_true = dhdx_true.to(device)
+            dhdy_true = dhdy_true.to(device)
+            ux_true = ux_true.to(device)
+            uy_true = uy_true.to(device)
 
-        # Obliczanie błędów z opcjonalnym odcięciem gradientów pola u (detach_u=True)
-        res_ux, res_uy, res_h = compute_joint_pde_residuals(
-            model, X_pde, detach_u=True
-        )
-        loss_pde = w_pde_u * (
-            torch.mean(res_ux**2) + torch.mean(res_uy**2)
-        ) + w_pde_h * torch.mean(res_h**2)
+            optimizer.zero_grad()
 
-        total_loss = loss_bc + loss_pde
+            # Przejście w przód przez sieć splotową U-Net (zwraca [B, 3, 128, 128])
+            pred_3ch = model(grid)
+            h_pred = pred_3ch[
+                :, 2:3, :, :
+            ]  # Kanał 2 to funkcja bezpieczeństwa h
 
-        total_loss.backward()
-        optimizer.step()
+            # Strata danych (porównanie przewidywanego h ze stanem faktycznym z H5)
+            # loss_data = criterion(h_pred, h_true)
 
-        if (epoch + 1) % 200 == 0 or epoch == 0:
-            print(
-                f"Epoch {epoch + 1:4d}/{epochs} | Total Loss: {total_loss.item():.6e} | BC Loss: {loss_bc.item():.6e} | PDE Loss: {loss_pde.item():.6e}"
+            # Strata fizyczna PDE wyznaczana splotowo na GPU
+            pde_loss, loss_data, bc_loss, _, _ = (
+                calc_poisson_pinn_loss(
+                    pred_3ch,
+                    h_true,
+                    dhdx_true,
+                    dhdy_true,
+                    ux_true,
+                    uy_true,
+                    grid,
+                    dx=dx,
+                    detach_u=True,
+                )
             )
 
-    # --- WIZUALIZACJA WYNIKÓW ---
-    print("\nGenerowanie wykresów wynikowych...")
-    resolution = grid.shape[0]
+            # Całkowita hybrydowa strata (Dane + Fizyka)
+            loss = loss_data + w_pde * pde_loss + w_bc * bc_loss
 
-    x = np.linspace(-5, 5, 200)
-    y = np.linspace(-5, 5, 200)
-    X, Y = np.meshgrid(x, y)
-    grid_points = np.stack([X.ravel(), Y.ravel()], axis=1)
+            loss.backward()
+            optimizer.step()
 
-    mask = np.zeros(grid_points.shape[0], dtype=bool)
-    for i, pt in enumerate(grid_points):
-        col = int((pt[0] + 5.0) / 10.0 * (resolution - 1))
-        row = int((pt[1] + 5.0) / 10.0 * (resolution - 1))
-        row = np.clip(row, 0, resolution - 1)
-        col = np.clip(col, 0, resolution - 1)
-        if grid[row, col] == 0:
-            mask[i] = True
+            running_loss += loss.item()
+            pbar.set_postfix(loss=loss.item())
 
-    grid_tensor = torch.tensor(grid_points, dtype=torch.float32)
-    with torch.no_grad():
-        preds = model(grid_tensor).numpy()
+        # --- Walidacja po każdej epoce ---
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for (
+                grid_val,
+                h_val_true,
+                dhdx_val_true,
+                dhdy_val_true,
+                ux_val_true,
+                uy_val_true,
+            ) in val_loader:
+                grid_val = grid_val.to(device)
+                h_val_true = h_val_true.to(device)
+                dhdx_val_true = dhdx_val_true.to(device)
+                dhdy_val_true = dhdy_val_true.to(device)
+                ux_val_true = ux_val_true.to(device)
+                uy_val_true = uy_val_true.to(device)
 
-    preds[~mask] = np.nan
-    U_x_grid = preds[:, 0].reshape(X.shape)
-    U_y_grid = preds[:, 1].reshape(X.shape)
-    H_grid = preds[:, 2].reshape(X.shape)
-    Magnitude = np.sqrt(U_x_grid**2 + U_y_grid**2)
+                pred_val = model(grid_val)
+                h_val_pred = pred_val[:, 2:3, :, :]
+                val_loss += criterion(h_val_pred, h_val_true).item()
 
-    H_grad_y, H_grad_x = np.gradient(
-        np.where(np.isnan(H_grid), 0, H_grid), 10.0 / 200.0
+        print(
+            f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f}"
+        )
+
+    # 4. Zapisanie wag modelu na dysku
+    os.makedirs(os.path.dirname(WEIGHTS_PATH) or ".", exist_ok=True)
+    torch.save(model.state_dict(), WEIGHTS_PATH)
+    print(f"\nPomyślnie zapisano wagi modelu do {WEIGHTS_PATH}")
+
+    # --- 5. WIZUALIZACJA WYNIKÓW DLA PIERWSZEJ MAPY TESTOWEJ ---
+    print("\nGenerowanie wykresu końcowego dla wybranej mapy...")
+    grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = (
+        val_dataset[0]
     )
-    H_grad_x[~mask.reshape(X.shape)] = np.nan
-    H_grad_y[~mask.reshape(X.shape)] = np.nan
+    grid_tensor = grid.unsqueeze(0).to(
+        device
+    )  # Dodanie wymiaru batcha [1, 1, 128, 128]
+
+    model.eval()
+    with torch.no_grad():
+        preds_3ch = (
+            model(grid_tensor).cpu().numpy().squeeze(0)
+        )  # [3, 128, 128]
+
+    u_x_pred = preds_3ch[0]
+    u_y_pred = preds_3ch[1]
+    h_pred = preds_3ch[2]
+
+    grid_np = grid.squeeze().numpy()
+    h_true_np = h_true.squeeze().numpy()
+    magnitude = np.sqrt(u_x_pred**2 + u_y_pred**2)
+
+    # Zamaskowanie wnętrza przeszkód do rysowania
+    mask = grid_np == 0
+    u_x_pred[~mask] = np.nan
+    u_y_pred[~mask] = np.nan
+    h_pred[~mask] = np.nan
+    magnitude[~mask] = np.nan
+
+    x = np.linspace(-5, 5, 128)
+    y = np.linspace(-5, 5, 128)
+    X, Y = np.meshgrid(x, y)
 
     plt.figure(figsize=(18, 5.5))
 
-    plt.subplot(1, 3, 1)
-    cp1 = plt.contourf(X, Y, Magnitude, levels=50, cmap="viridis")
+    # Panel 0: Harmonijny potencjał u (referencyjne)
+    plt.subplot(1, 4, 1)
+    cp1 = plt.contourf(X, Y, magnitude, levels=50, cmap="viridis")
     plt.colorbar(cp1, label="Magnituda ||u||")
+    # Przygotuj wektory referencyjne z dataset (zamień na numpy i dopasuj kształt)
+    ux_true_np = (
+        ux_true.squeeze().cpu().numpy()
+        if isinstance(ux_true, torch.Tensor)
+        else np.array(ux_true)
+    )
+    uy_true_np = (
+        uy_true.squeeze().cpu().numpy()
+        if isinstance(uy_true, torch.Tensor)
+        else np.array(uy_true)
+    )
+    # Zamaskowanie obszarów poza wolną przestrzenią
+    ux_true_np[~mask] = np.nan
+    uy_true_np[~mask] = np.nan
+    # Transponuj je gdy trzeba, aby dopasować X,Y
+    if ux_true_np.shape != X.shape:
+        if ux_true_np.T.shape == X.shape:
+            ux_true_np = ux_true_np.T
+            uy_true_np = uy_true_np.T
     plt.streamplot(
         X,
         Y,
-        U_x_grid,
-        U_y_grid,
+        ux_true_np,
+        uy_true_np,
         color="white",
         linewidth=0.8,
         density=1.0,
     )
     plt.imshow(
-        grid,
+        grid_np,
         origin="lower",
         extent=[-5, 5, -5, 5],
         cmap="gray_r",
@@ -624,44 +682,73 @@ if __name__ == "__main__":
     plt.ylabel("Y")
     plt.axis("equal")
 
-    plt.subplot(1, 3, 2)
-    cp2 = plt.contourf(X, Y, H_grid, levels=50, cmap="plasma")
-    plt.colorbar(cp2, label="Wartość h(x,y)")
+    # Panel 1: Harmonijny potencjał u
+    plt.subplot(1, 4, 2)
+    cp1 = plt.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+    plt.colorbar(cp1, label="Magnituda ||u||")
+    # Streamplot do wizualizacji kierunków
+    # Upewnij się, że macierze wektorów mają ten sam kształt co X, Y
+    u_x_plot = u_x_pred
+    u_y_plot = u_y_pred
+    if u_x_plot.shape != X.shape:
+        if u_x_plot.T.shape == X.shape:
+            u_x_plot = u_x_plot.T
+            u_y_plot = u_y_plot.T
+    # Co 4 punkty do poprawnego rysowania wektorów
+    plt.streamplot(
+        X,
+        Y,
+        u_x_plot,
+        u_y_plot,
+        color="white",
+        linewidth=0.8,
+        density=1.0,
+    )
     plt.imshow(
-        grid,
+        grid_np,
         origin="lower",
         extent=[-5, 5, -5, 5],
         cmap="gray_r",
         alpha=0.3,
     )
     plt.title(
-        "Wyznaczona funkcja bezpieczeństwa $h(x,y)$\n(Poisson Safety Function)"
+        "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
     )
     plt.xlabel("X")
     plt.ylabel("Y")
     plt.axis("equal")
 
-    plt.subplot(1, 3, 3)
-    plt.contourf(X, Y, H_grid, levels=30, cmap="plasma", alpha=0.6)
-    skip = 10
-    plt.quiver(
-        X[::skip, ::skip],
-        Y[::skip, ::skip],
-        H_grad_x[::skip, ::skip],
-        H_grad_y[::skip, ::skip],
-        color="white",
-        scale=50,
-        width=0.004,
-    )
+    # Panel 2: Referencyjne H z pliku H5
+    plt.subplot(1, 4, 3)
+    cp2 = plt.contourf(X, Y, h_true_np, levels=50, cmap="plasma")
+    plt.colorbar(cp2, label="Wartość h_true")
     plt.imshow(
-        grid,
+        grid_np,
         origin="lower",
         extent=[-5, 5, -5, 5],
         cmap="gray_r",
-        alpha=0.4,
+        alpha=0.3,
     )
     plt.title(
-        "Wektory gradientu $\\nabla h = [\\partial h/\\partial x, \\partial h/\\partial y]^T$\n(Kierunki najszybszego wzrostu bezpieczeństwa)"
+        "Referencyjna funkcja bezpieczeństwa\n(Rozwiązanie numeryczne z H5)"
+    )
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.axis("equal")
+
+    # Panel 3: Predykcja sieci neuronowej H_pred
+    plt.subplot(1, 4, 4)
+    cp3 = plt.contourf(X, Y, h_pred, levels=50, cmap="plasma")
+    plt.colorbar(cp3, label="Wartość h_pred")
+    plt.imshow(
+        grid_np,
+        origin="lower",
+        extent=[-5, 5, -5, 5],
+        cmap="gray_r",
+        alpha=0.3,
+    )
+    plt.title(
+        "Wyznaczona funkcja bezpieczeństwa $h(x,y)$\n(Predykcja sieci UNetDoublePoisson)"
     )
     plt.xlabel("X")
     plt.ylabel("Y")
