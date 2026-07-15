@@ -10,10 +10,13 @@ from __future__ import annotations
 import argparse
 import os
 import math
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import numpy as np
 import h5py
+from tqdm import tqdm
 from scipy import sparse
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import splu
 
 
 def solve_laplace_and_poisson(objects_list, n=128):
@@ -54,16 +57,11 @@ def solve_laplace_and_poisson(objects_list, n=128):
     unknown[:, -1] = False
     unknown[mask] = False
 
-    # Mapa indeksów węzłów niewiadomych na potrzeby solvera rzadkiego
-    node_idx = -np.ones((ny, nx), dtype=int)
-    idx_flat = 0
-    for j in range(ny):
-        for i in range(nx):
-            if unknown[j, i]:
-                node_idx[j, i] = idx_flat
-                idx_flat += 1
+    # Mapa indeksów węzłów niewiadomych na potrzeby solvera rzadkiego (wektoryzowane)
+    unknown_flat = unknown.reshape(-1)
+    known_flat = ~unknown_flat
+    N = int(unknown_flat.sum())
 
-    N = idx_flat
     if N == 0:
         h = np.zeros((ny, nx), dtype=np.float32)
         return (
@@ -73,81 +71,54 @@ def solve_laplace_and_poisson(objects_list, n=128):
             np.zeros((ny, nx), dtype=np.uint8),
         )
 
-    # --- Budowanie rzadkiej macierzy Laplasjanu A (szablon 5-punktowy) ---
-    data = []
-    rows = []
-    cols = []
+    # --- Budowanie rzadkiej macierzy Laplasjanu A (szablon 5-punktowy), wektoryzowane ---
+    # 1D operator drugiej pochodnej (rozmiar n); łączymy przez iloczyn Kroneckera,
+    # co odtwarza dokładnie ten sam szablon 5-punktowy co pętle, bez narzutu Pythona.
+    inv_dx2 = 1.0 / (dx * dx)
+    main_diag = -2.0 * inv_dx2 * np.ones(n)
+    off_diag = inv_dx2 * np.ones(n - 1)
+    D2 = sparse.diags(
+        [off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format="csr"
+    )
+    I_n = sparse.identity(n, format="csr")
+    # Laplasjan pełnej siatki (indeks płaski: idx = j * nx + i)
+    A_full = sparse.kron(I_n, D2, format="csr") + sparse.kron(
+        D2, I_n, format="csr"
+    )
 
-    def add_entry(r, c, v):
-        rows.append(r)
-        cols.append(c)
-        data.append(v)
-
-    for j in range(1, ny - 1):
-        for i in range(1, nx - 1):
-            if not unknown[j, i]:
-                continue
-            row = node_idx[j, i]
-            add_entry(row, row, -4.0 / (dx * dx))
-            for jj, ii in (
-                (j - 1, i),
-                (j + 1, i),
-                (j, i - 1),
-                (j, i + 1),
-            ):
-                if unknown[jj, ii]:
-                    add_entry(row, node_idx[jj, ii], 1.0 / (dx * dx))
-
-    A = sparse.csr_matrix((data, (rows, cols)), shape=(N, N))
+    A = A_full[unknown_flat][:, unknown_flat].tocsc()
+    # Blok macierzy łączący węzły niewiadome ze znanymi (dla wkładu warunków brzegowych do RHS)
+    A_bc = A_full[unknown_flat][:, known_flat]
 
     # --- 1. ROZWIĄZYWANIE RÓWNANIA LAPLACE'A DLA POLA WEKTOROWEGO u ---
-    # Rozwiązujemy niezależnie dla składowych u_x oraz u_y
-    rhs_ux = np.zeros(N, dtype=np.float64)
-    rhs_uy = np.zeros(N, dtype=np.float64)
+    # Wartości brzegowe pola u na węzłach znanych: przeszkody -> u = x - c_i,
+    # zewnętrzne ściany -> u = 0 (pozostają zerowe z inicjalizacji).
+    val_ux_full = np.zeros((ny, nx), dtype=np.float64)
+    val_uy_full = np.zeros((ny, nx), dtype=np.float64)
+    if objects_list:
+        cx_arr = np.array([centers[i][0] for i in range(len(objects_list))])
+        cy_arr = np.array([centers[i][1] for i in range(len(objects_list))])
+        obj_ids = obstacle_id_map[mask]
+        val_ux_full[mask] = X[mask] - cx_arr[obj_ids]
+        val_uy_full[mask] = Y[mask] - cy_arr[obj_ids]
 
-    for j in range(1, ny - 1):
-        for i in range(1, nx - 1):
-            if not unknown[j, i]:
-                continue
-            row = node_idx[j, i]
+    # Rozwiązujemy niezależnie dla składowych u_x oraz u_y (ten sam wkład warunków brzegowych)
+    rhs_ux = -(A_bc @ val_ux_full.reshape(-1)[known_flat])
+    rhs_uy = -(A_bc @ val_uy_full.reshape(-1)[known_flat])
 
-            # Warunki brzegowe wnoszą wkład do prawej strony (RHS), jeśli sąsiedzi są krawędziami
-            for jj, ii in (
-                (j - 1, i),
-                (j + 1, i),
-                (j, i - 1),
-                (j, i + 1),
-            ):
-                if not unknown[jj, ii]:
-                    if mask[jj, ii]:
-                        obs_id = obstacle_id_map[jj, ii]
-                        cx, cy = centers[obs_id]
-                        val_ux = X[jj, ii] - cx
-                        val_uy = Y[jj, ii] - cy
-                    else:
-                        # Zewnętrzne krawędzie obszaru mają zerowy potencjał
-                        val_ux = 0.0
-                        val_uy = 0.0
-
-                    rhs_ux[row] -= val_ux / (dx * dx)
-                    rhs_uy[row] -= val_uy / (dx * dx)
-
-    u_x_sol = spsolve(A, rhs_ux)
-    u_y_sol = spsolve(A, rhs_uy)
+    # Jedna faktoryzacja LU macierzy A, wykorzystywana wielokrotnie (u_x, u_y, h)
+    lu = splu(A)
+    u_sol = lu.solve(np.column_stack([rhs_ux, rhs_uy]))
+    u_x_sol = u_sol[:, 0]
+    u_y_sol = u_sol[:, 1]
 
     # Odtwarzanie pełnych pól składowych u
     u_x = np.zeros((ny, nx), dtype=np.float32)
     u_y = np.zeros((ny, nx), dtype=np.float32)
-    for j in range(ny):
-        for i in range(nx):
-            if unknown[j, i]:
-                u_x[j, i] = u_x_sol[node_idx[j, i]]
-                u_y[j, i] = u_y_sol[node_idx[j, i]]
-            elif mask[j, i]:
-                obs_id = obstacle_id_map[j, i]
-                cx, cy = centers[obs_id]
-                u_x[j, i] = X[j, i] - cx
-                u_y[j, i] = Y[j, i] - cy
+    u_x.reshape(-1)[unknown_flat] = u_x_sol
+    u_y.reshape(-1)[unknown_flat] = u_y_sol
+    u_x.reshape(-1)[known_flat] = val_ux_full.reshape(-1)[known_flat]
+    u_y.reshape(-1)[known_flat] = val_uy_full.reshape(-1)[known_flat]
 
     # Numeryczne obliczanie gradientów pola u
     duy_dy, duy_dx = np.gradient(u_y, y, x)
@@ -160,22 +131,13 @@ def solve_laplace_and_poisson(objects_list, n=128):
 
     # --- 2. ROZWIĄZYWANIE RÓWNANIA POISSONA DLA FUNKCJI BEZPIECZEŃSTWA h ---
     # Równanie: Delta h = -||grad u||  =>  A * h = -norm_grad_u
-    rhs_h = np.zeros(N, dtype=np.float64)
-    for j in range(1, ny - 1):
-        for i in range(1, nx - 1):
-            if not unknown[j, i]:
-                continue
-            row = node_idx[j, i]
-            rhs_h[row] = -float(norm_grad_u[j, i])
-
-    h_sol = spsolve(A, rhs_h)
+    # (h = 0 na wszystkich węzłach znanych, więc wkład warunków brzegowych do RHS jest zerowy)
+    rhs_h = -norm_grad_u.reshape(-1)[unknown_flat].astype(np.float64)
+    h_sol = lu.solve(rhs_h)
 
     # Odtwarzanie pełnego pola h
     h = np.zeros((ny, nx), dtype=np.float32)
-    for j in range(ny):
-        for i in range(nx):
-            if unknown[j, i]:
-                h[j, i] = h_sol[node_idx[j, i]]
+    h.reshape(-1)[unknown_flat] = h_sol
 
     # Obliczanie pochodnych przestrzennych funkcji h
     dhdy, dhdx = np.gradient(h, y, x)
@@ -228,92 +190,120 @@ def make_objects_list_for_index(map_index, max_objects_number=12):
     return objects_list
 
 
+def compute_map_result(map_index, res):
+    objects_list = make_objects_list_for_index(map_index)
+    u_x, u_y, h, dhdx, dhdy, grid = solve_laplace_and_poisson(
+        objects_list, n=res
+    )
+    return map_index, u_x, u_y, h, dhdx, dhdy, grid
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "file_name", nargs="?", default="training_data_128x128.h5"
+        "file_name", nargs="?", default="nik_training_data_512x512_2000.h5"
     )
     parser.add_argument(
         "generated_maps_number", nargs="?", type=int, default=2000
     )
     parser.add_argument(
-        "resolution", nargs="?", type=int, default=128
+        "resolution", nargs="?", type=int, default=512
+    )
+    parser.add_argument(
+        "--num-threads",
+        type=int,
+        default=8,
+        help="Liczba wątków do równoległych obliczeń map (min 1)",
     )
     args = parser.parse_args()
 
     file_name = args.file_name
     generated_maps_number = args.generated_maps_number
     res = args.resolution
+    num_threads = max(1, int(args.num_threads))
 
     os.makedirs(os.path.dirname(file_name) or ".", exist_ok=True)
 
-    for map_index in range(1, generated_maps_number + 1):
-        objects_list = make_objects_list_for_index(map_index)
+    map_range = range(1, generated_maps_number + 1)
+    compute_fn = partial(compute_map_result, res=res)
 
-        u_x, u_y, h, dhdx, dhdy, grid = solve_laplace_and_poisson(
-            objects_list, n=res
-        )
+    if num_threads == 1:
+        results_iter = map(compute_fn, map_range)
+    else:
+        # Obliczenia są równoległe, ale zapis do HDF5 pozostaje sekwencyjny dla bezpieczeństwa.
+        executor = ThreadPoolExecutor(max_workers=num_threads)
+        results_iter = executor.map(compute_fn, map_range)
 
-        index_string = f"{map_index:06d}"
-        with h5py.File(file_name, "a") as f:
-            # Zapisujemy macierze o kształcie [1, H, W] zgodnym z architekturami splotowymi PyTorch
-            grid_data = np.expand_dims(grid, axis=0).astype(np.uint8)
-            h_data = np.expand_dims(h, axis=0).astype(np.float32)
-            u_x_data = np.expand_dims(u_x, axis=0).astype(np.float32)
-            u_y_data = np.expand_dims(u_y, axis=0).astype(np.float32)
-            dhdx_data = np.expand_dims(dhdx, axis=0).astype(
-                np.float32
-            )
-            dhdy_data = np.expand_dims(dhdy, axis=0).astype(
-                np.float32
-            )
+    try:
+        for map_index, u_x, u_y, h, dhdx, dhdy, grid in tqdm(
+            results_iter,
+            total=generated_maps_number,
+            desc=f"Generating maps ({num_threads} threads)",
+        ):
 
-            grp_grid = f.require_group("grid")
-            if index_string in grp_grid:
-                del grp_grid[index_string]
-            grp_grid.create_dataset(
-                index_string, data=grid_data, dtype="u1"
-            )
+            index_string = f"{map_index:06d}"
+            with h5py.File(file_name, "a") as f:
+                # Zapisujemy macierze o kształcie [1, H, W] zgodnym z architekturami splotowymi PyTorch
+                grid_data = np.expand_dims(grid, axis=0).astype(np.uint8)
+                h_data = np.expand_dims(h, axis=0).astype(np.float32)
+                u_x_data = np.expand_dims(u_x, axis=0).astype(np.float32)
+                u_y_data = np.expand_dims(u_y, axis=0).astype(np.float32)
+                dhdx_data = np.expand_dims(dhdx, axis=0).astype(
+                    np.float32
+                )
+                dhdy_data = np.expand_dims(dhdy, axis=0).astype(
+                    np.float32
+                )
 
-            grp_u_x = f.require_group("u_x")
-            if index_string in grp_u_x:
-                del grp_u_x[index_string]
-            grp_u_x.create_dataset(
-                index_string, data=u_x_data, dtype="f4"
-            )
+                grp_grid = f.require_group("grid")
+                if index_string in grp_grid:
+                    del grp_grid[index_string]
+                grp_grid.create_dataset(
+                    index_string, data=grid_data, dtype="u1"
+                )
 
-            grp_u_y = f.require_group("u_y")
-            if index_string in grp_u_y:
-                del grp_u_y[index_string]
-            grp_u_y.create_dataset(
-                index_string, data=u_y_data, dtype="f4"
-            )
+                grp_u_x = f.require_group("u_x")
+                if index_string in grp_u_x:
+                    del grp_u_x[index_string]
+                grp_u_x.create_dataset(
+                    index_string, data=u_x_data, dtype="f4"
+                )
 
-            grp_h = f.require_group("h")
-            if index_string in grp_h:
-                del grp_h[index_string]
-            grp_h.create_dataset(
-                index_string, data=h_data, dtype="f4"
-            )
+                grp_u_y = f.require_group("u_y")
+                if index_string in grp_u_y:
+                    del grp_u_y[index_string]
+                grp_u_y.create_dataset(
+                    index_string, data=u_y_data, dtype="f4"
+                )
 
-            grp_dhdx = f.require_group("dhdx")
-            if index_string in grp_dhdx:
-                del grp_dhdx[index_string]
-            grp_dhdx.create_dataset(
-                index_string, data=dhdx_data, dtype="f4"
-            )
+                grp_h = f.require_group("h")
+                if index_string in grp_h:
+                    del grp_h[index_string]
+                grp_h.create_dataset(
+                    index_string, data=h_data, dtype="f4"
+                )
 
-            grp_dhdy = f.require_group("dhdy")
-            if index_string in grp_dhdy:
-                del grp_dhdy[index_string]
-            grp_dhdy.create_dataset(
-                index_string, data=dhdy_data, dtype="f4"
-            )
+                grp_dhdx = f.require_group("dhdx")
+                if index_string in grp_dhdx:
+                    del grp_dhdx[index_string]
+                grp_dhdx.create_dataset(
+                    index_string, data=dhdx_data, dtype="f4"
+                )
 
-        if map_index % 50 == 0:
-            print(
-                f"Wygenerowano sprzężoną mapę {map_index}/{generated_maps_number} ({res}x{res}) -> {file_name}:{index_string}"
-            )
+                grp_dhdy = f.require_group("dhdy")
+                if index_string in grp_dhdy:
+                    del grp_dhdy[index_string]
+                grp_dhdy.create_dataset(
+                    index_string, data=dhdy_data, dtype="f4"
+                )
+
+            if map_index % 50 == 0:
+                print(
+                    f"Wygenerowano sprzężoną mapę {map_index}/{generated_maps_number} ({res}x{res}) -> {file_name}:{index_string}"
+                )
+    finally:
+        if num_threads > 1:
+            executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":
