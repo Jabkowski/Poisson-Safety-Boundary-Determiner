@@ -161,32 +161,27 @@ class H5PoissonDataset(Dataset):
             # Sortujemy klucze (indeksy map) dla zachowania spójności
             keys = sorted(list(f["grid"].keys()))
             for key in tqdm(keys, desc="Wczytywanie map"):
-                # Obrazy w bazie są zapisane jako [1, H, W]
-                grid_data = f["grid"][key][:]
-                h_data = f["h"][key][:]
-                dhdx_data = f["dhdx"][key][:]
-                dhdy_data = f["dhdy"][key][:]
-                ux_data = f["u_x"][key][:]
-                uy_data = f["u_y"][key][:]
+                # Obrazy w bazie są zapisane jako [H, W] lub [1, H, W];
+                # normalizujemy do [1, H, W], bo model oczekuje wejścia 4D [B, C, H, W].
+                def _as_channel_tensor(data):
+                    arr = np.asarray(data, dtype=np.float32)
+                    if arr.ndim == 2:
+                        arr = arr[None, ...]
+                    return torch.tensor(arr, dtype=torch.float32)
 
-                self.grids.append(
-                    torch.tensor(grid_data, dtype=torch.float32)
-                )
-                self.h_values.append(
-                    torch.tensor(h_data, dtype=torch.float32)
-                )
-                self.dhdx_values.append(
-                    torch.tensor(dhdx_data, dtype=torch.float32)
-                )
-                self.dhdy_values.append(
-                    torch.tensor(dhdy_data, dtype=torch.float32)
-                )
-                self.ux_values.append(
-                    -torch.tensor(ux_data, dtype=torch.float32)
-                )
-                self.uy_values.append(
-                    -torch.tensor(uy_data, dtype=torch.float32)
-                )
+                grid_data = _as_channel_tensor(f["grid"][key][:])
+                h_data = _as_channel_tensor(f["h"][key][:])
+                dhdx_data = _as_channel_tensor(f["dhdx"][key][:])
+                dhdy_data = _as_channel_tensor(f["dhdy"][key][:])
+                ux_data = _as_channel_tensor(f["u_x"][key][:])
+                uy_data = _as_channel_tensor(f["u_y"][key][:])
+
+                self.grids.append(grid_data)
+                self.h_values.append(h_data)
+                self.dhdx_values.append(dhdx_data)
+                self.dhdy_values.append(dhdy_data)
+                self.ux_values.append(ux_data)
+                self.uy_values.append(uy_data)
 
     def __len__(self):
         return len(self.grids)
@@ -245,16 +240,16 @@ def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
             cy = -5.0 + (row_c / (H - 1)) * 10.0
             centers[i] = (cx, cy)
 
-        # Budowanie celu wektorowego na krawędziach
-        rows, cols = np.where(boundary_np)
-        for r, c in zip(rows, cols):
-            wx = -5.0 + (c / (W - 1)) * 10.0
-            wy = -5.0 + (r / (H - 1)) * 10.0
-            obs_id = labeled[r, c]
-            if obs_id in centers:
-                cx, cy = centers[obs_id]
-                U_targets[b, 0, r, c] = 1.0 * (wx - cx)  # u_x_target
-                U_targets[b, 1, r, c] = 1.0 * (wy - cy)  # u_y_target
+        # # Budowanie celu wektorowego na krawędziach
+        # rows, cols = np.where(boundary_np)
+        # for r, c in zip(rows, cols):
+        #     wx = -5.0 + (c / (W - 1)) * 10.0
+        #     wy = -5.0 + (r / (H - 1)) * 10.0
+        #     obs_id = labeled[r, c]
+        #     if obs_id in centers:
+        #         cx, cy = centers[obs_id]
+        #         U_targets[b, 0, r, c] = 1.0 * (wx - cx)  # u_x_target
+        #         U_targets[b, 1, r, c] = 1.0 * (wy - cy)  # u_y_target
 
     return U_targets, boundary_masks
 
@@ -499,7 +494,7 @@ if __name__ == "__main__":
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 5
+    epochs = 10
     w_pde = 0.01
     w_bc = 0.1
     dx = (
@@ -542,21 +537,22 @@ if __name__ == "__main__":
             ]  # Kanał 2 to funkcja bezpieczeństwa h
 
             # Strata danych (porównanie przewidywanego h ze stanem faktycznym z H5)
-            # loss_data = criterion(h_pred, h_true)
+            loss_data_h = criterion(h_pred, h_true)
+            loss_data_ux = criterion(pred_3ch[:, 0:1, :, :], ux_true)
+            loss_data_uy = criterion(pred_3ch[:, 1:2, :, :], uy_true)
+            loss_data = loss_data_h + loss_data_ux + loss_data_uy
 
             # Strata fizyczna PDE wyznaczana splotowo na GPU
-            pde_loss, loss_data, bc_loss, _, _ = (
-                calc_poisson_pinn_loss(
-                    pred_3ch,
-                    h_true,
-                    dhdx_true,
-                    dhdy_true,
-                    ux_true,
-                    uy_true,
-                    grid,
-                    dx=dx,
-                    detach_u=True,
-                )
+            pde_loss, _, bc_loss, _, _ = calc_poisson_pinn_loss(
+                pred_3ch,
+                h_true,
+                dhdx_true,
+                dhdy_true,
+                ux_true,
+                uy_true,
+                grid,
+                dx=dx,
+                detach_u=True,
             )
 
             # Całkowita hybrydowa strata (Dane + Fizyka)
