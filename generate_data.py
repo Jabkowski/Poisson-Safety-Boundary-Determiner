@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-Skrypt do generowania map przeszkód i obliczania dokładnych funkcji bezpieczeństwa Poissona (PSF)
-przy użyciu sprzężonego solvera różnic skończonych na regularnej siatce w obszarze [-5.0, 5.0]^2.
-Domyślna rozdzielczość siatki wynosi 128x128.
+Skrypt do generowania map przeszkód i obliczania funkcji bezpieczeństwa Poissona (PSF)
+przy użyciu solvera różnic skończonych na regularnej siatce.
+
+Domyślnie uruchamia się w trybie MATLAB-compatible:
+- domena [0.0, 1.0]^2,
+- losowanie przeszkód zgodne z generate_maps_and_psf.m,
+- człon źródłowy Poissona f = ||u||.
+
+Domyślna rozdzielczość siatki: 128x128.
 """
 
 from __future__ import annotations
@@ -19,19 +25,29 @@ from scipy import sparse
 from scipy.sparse.linalg import splu
 
 
-def solve_laplace_and_poisson(objects_list, n=128):
+def solve_laplace_and_poisson(
+    objects_list,
+    n=128,
+    domain_min=0.0,
+    domain_max=1.0,
+    ux_bc_value=0.01,
+    uy_bc_value=0.01,
+    source_mode="matlab",
+):
     """
-    Rozwiązuje sprzężony układ równań na obszarze [-5, 5]^2:
-    1) Delta u = 0 w Omega, u = x - c_i na krawędziach przeszkód
-    2) Delta h = -||grad u|| w Omega, h = 0 na krawędziach przeszkód i ścianach zewnętrznych
+    Rozwiązuje sprzężony układ równań na zadanym kwadracie [domain_min, domain_max]^2:
+    1) Delta u = 0 w Omega, z warunkami Dirichleta na brzegu
+    2) Delta h = -f w Omega, h = 0 na krawędziach przeszkód i ścianach zewnętrznych
 
     - objects_list: lista słowników z kluczami 'c' (środek) i 'r' (promień)
     - n: rozdzielczość siatki (domyślnie 128)
+    - ux_bc_value, uy_bc_value: stałe wartości Dirichleta dla pola u na brzegu
+    - source_mode: "matlab" -> f = ||u||, "legacy" -> f = ||grad u||
     - zwraca: h (n,n), dhdx (n,n), dhdy (n,n), grid (n,n uint8)
     """
     nx = ny = n
-    x = np.linspace(-5.0, 5.0, nx)
-    y = np.linspace(-5.0, 5.0, ny)
+    x = np.linspace(domain_min, domain_max, nx)
+    y = np.linspace(domain_min, domain_max, ny)
     dx = x[1] - x[0]
     X, Y = np.meshgrid(x, y, indexing="xy")
 
@@ -91,16 +107,11 @@ def solve_laplace_and_poisson(objects_list, n=128):
     A_bc = A_full[unknown_flat][:, known_flat]
 
     # --- 1. ROZWIĄZYWANIE RÓWNANIA LAPLACE'A DLA POLA WEKTOROWEGO u ---
-    # Wartości brzegowe pola u na węzłach znanych: przeszkody -> u = x - c_i,
-    # zewnętrzne ściany -> u = 0 (pozostają zerowe z inicjalizacji).
+    # MATLAB-compatible default: stała wartość na całym brzegu (zewnętrznym i przeszkodach).
     val_ux_full = np.zeros((ny, nx), dtype=np.float64)
     val_uy_full = np.zeros((ny, nx), dtype=np.float64)
-    if objects_list:
-        cx_arr = np.array([centers[i][0] for i in range(len(objects_list))])
-        cy_arr = np.array([centers[i][1] for i in range(len(objects_list))])
-        obj_ids = obstacle_id_map[mask]
-        val_ux_full[mask] = X[mask] - cx_arr[obj_ids]
-        val_uy_full[mask] = Y[mask] - cy_arr[obj_ids]
+    val_ux_full.reshape(-1)[known_flat] = float(ux_bc_value)
+    val_uy_full.reshape(-1)[known_flat] = float(uy_bc_value)
 
     # Rozwiązujemy niezależnie dla składowych u_x oraz u_y (ten sam wkład warunków brzegowych)
     rhs_ux = -(A_bc @ val_ux_full.reshape(-1)[known_flat])
@@ -120,19 +131,26 @@ def solve_laplace_and_poisson(objects_list, n=128):
     u_x.reshape(-1)[known_flat] = val_ux_full.reshape(-1)[known_flat]
     u_y.reshape(-1)[known_flat] = val_uy_full.reshape(-1)[known_flat]
 
-    # Numeryczne obliczanie gradientów pola u
-    duy_dy, duy_dx = np.gradient(u_y, y, x)
-    dux_dy, dux_dx = np.gradient(u_x, y, x)
-
-    # Wyznaczenie modułu gradientu (człon źródłowy równania Poissona): f = ||grad u||
-    norm_grad_u = np.sqrt(
-        dux_dx**2 + dux_dy**2 + duy_dx**2 + duy_dy**2 + 1e-8
-    )
+    # Człon źródłowy równania Poissona:
+    # - matlab: f = ||u||
+    # - legacy: f = ||grad u||
+    if source_mode == "matlab":
+        source_f = np.sqrt(u_x**2 + u_y**2 + 1e-8)
+    elif source_mode == "legacy":
+        duy_dy, duy_dx = np.gradient(u_y, y, x)
+        dux_dy, dux_dx = np.gradient(u_x, y, x)
+        source_f = np.sqrt(
+            dux_dx**2 + dux_dy**2 + duy_dx**2 + duy_dy**2 + 1e-8
+        )
+    else:
+        raise ValueError(
+            "Invalid source_mode. Expected 'matlab' or 'legacy'."
+        )
 
     # --- 2. ROZWIĄZYWANIE RÓWNANIA POISSONA DLA FUNKCJI BEZPIECZEŃSTWA h ---
-    # Równanie: Delta h = -||grad u||  =>  A * h = -norm_grad_u
+    # Równanie: Delta h = -f  =>  A * h = -source_f
     # (h = 0 na wszystkich węzłach znanych, więc wkład warunków brzegowych do RHS jest zerowy)
-    rhs_h = -norm_grad_u.reshape(-1)[unknown_flat].astype(np.float64)
+    rhs_h = -source_f.reshape(-1)[unknown_flat].astype(np.float64)
     h_sol = lu.solve(rhs_h)
 
     # Odtwarzanie pełnego pola h
@@ -151,8 +169,17 @@ def solve_laplace_and_poisson(objects_list, n=128):
     return u_x, u_y, h, dhdx, dhdy, grid
 
 
-def make_objects_list_for_index(map_index, max_objects_number=12):
-    """Generuje losowe rozłożenie przeszkód wewnątrz obszaru [-5, 5]^2."""
+def make_objects_list_for_index(
+    map_index,
+    max_objects_number=50,
+    domain_min=0.0,
+    domain_max=1.0,
+    radius_min=0.02,
+    radius_max=0.12,
+    overlap_margin=0.005,
+    boundary_margin=1e-4,
+):
+    """Generuje losowe rozłożenie przeszkód na domenie kwadratowej."""
     rng = np.random.RandomState(map_index)
     objects_number = int(math.ceil(max_objects_number * rng.rand()))
     objects_list = []
@@ -166,18 +193,24 @@ def make_objects_list_for_index(map_index, max_objects_number=12):
         valid = False
         while not valid and attempts < max_attempts:
             attempts += 1
-            # Pozycja losowa w zakresie [-4.3, 4.3] dla zachowania marginesu bezpieczeństwa
-            potential_c = rng.uniform(-4.3, 4.3, 2)
-            potential_r = rng.uniform(
-                0.3, 0.5
-            )  # Zrównoważony promień przeszkód
+            # MATLAB-compatible sampling: środek jednostajnie w domenie i promień z przedziału [0.02, 0.12]
+            potential_c = rng.uniform(domain_min, domain_max, 2)
+            potential_r = rng.uniform(radius_min, radius_max)
+
+            if (
+                potential_c[0] - potential_r < domain_min + boundary_margin
+                or potential_c[0] + potential_r > domain_max - boundary_margin
+                or potential_c[1] - potential_r < domain_min + boundary_margin
+                or potential_c[1] + potential_r > domain_max - boundary_margin
+            ):
+                continue
 
             overlap = False
             for obj in objects_list:
                 dist_centers = np.linalg.norm(
                     potential_c - np.array(obj["c"])
                 )
-                if dist_centers < (potential_r + obj["r"] + 0.4):
+                if dist_centers < (potential_r + obj["r"] + overlap_margin):
                     overlap = True
                     break
 
@@ -190,10 +223,38 @@ def make_objects_list_for_index(map_index, max_objects_number=12):
     return objects_list
 
 
-def compute_map_result(map_index, res):
-    objects_list = make_objects_list_for_index(map_index)
+def compute_map_result(
+    map_index,
+    res,
+    max_objects_number,
+    domain_min,
+    domain_max,
+    radius_min,
+    radius_max,
+    overlap_margin,
+    boundary_margin,
+    ux_bc_value,
+    uy_bc_value,
+    source_mode,
+):
+    objects_list = make_objects_list_for_index(
+        map_index,
+        max_objects_number=max_objects_number,
+        domain_min=domain_min,
+        domain_max=domain_max,
+        radius_min=radius_min,
+        radius_max=radius_max,
+        overlap_margin=overlap_margin,
+        boundary_margin=boundary_margin,
+    )
     u_x, u_y, h, dhdx, dhdy, grid = solve_laplace_and_poisson(
-        objects_list, n=res
+        objects_list,
+        n=res,
+        domain_min=domain_min,
+        domain_max=domain_max,
+        ux_bc_value=ux_bc_value,
+        uy_bc_value=uy_bc_value,
+        source_mode=source_mode,
     )
     return map_index, u_x, u_y, h, dhdx, dhdy, grid
 
@@ -201,13 +262,73 @@ def compute_map_result(map_index, res):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "file_name", nargs="?", default="nik_training_data_512x512_2000.h5"
+        "file_name", nargs="?", default="nik_fixed_training_data_512x512_2000.h5"
     )
     parser.add_argument(
         "generated_maps_number", nargs="?", type=int, default=2000
     )
     parser.add_argument(
         "resolution", nargs="?", type=int, default=512
+    )
+    parser.add_argument(
+        "--domain-min",
+        type=float,
+        default=0.0,
+        help="Minimalna współrzędna domeny (MATLAB: 0.0)",
+    )
+    parser.add_argument(
+        "--domain-max",
+        type=float,
+        default=1.0,
+        help="Maksymalna współrzędna domeny (MATLAB: 1.0)",
+    )
+    parser.add_argument(
+        "--max-objects-number",
+        type=int,
+        default=50,
+        help="Maksymalna liczba przeszkód losowanych na mapę (MATLAB: 50)",
+    )
+    parser.add_argument(
+        "--radius-min",
+        type=float,
+        default=0.02,
+        help="Minimalny promień przeszkody (MATLAB: 0.02)",
+    )
+    parser.add_argument(
+        "--radius-max",
+        type=float,
+        default=0.12,
+        help="Maksymalny promień przeszkody (MATLAB: 0.12)",
+    )
+    parser.add_argument(
+        "--overlap-margin",
+        type=float,
+        default=0.005,
+        help="Minimalna separacja między przeszkodami (MATLAB: 0.005)",
+    )
+    parser.add_argument(
+        "--boundary-margin",
+        type=float,
+        default=1e-4,
+        help="Margines od zewnętrznego brzegu dla centrów przeszkód (MATLAB: 1e-4)",
+    )
+    parser.add_argument(
+        "--ux-bc-value",
+        type=float,
+        default=0.01,
+        help="Dirichlet BC dla składowej u_x na brzegu (MATLAB: 0.01)",
+    )
+    parser.add_argument(
+        "--uy-bc-value",
+        type=float,
+        default=0.01,
+        help="Dirichlet BC dla składowej u_y na brzegu (MATLAB: 0.01)",
+    )
+    parser.add_argument(
+        "--source-mode",
+        choices=["matlab", "legacy"],
+        default="matlab",
+        help='Tryb źródła równania Poissona: "matlab" -> ||u||, "legacy" -> ||grad u||',
     )
     parser.add_argument(
         "--num-threads",
@@ -221,11 +342,39 @@ def main():
     generated_maps_number = args.generated_maps_number
     res = args.resolution
     num_threads = max(1, int(args.num_threads))
+    domain_min = float(args.domain_min)
+    domain_max = float(args.domain_max)
+    max_objects_number = max(0, int(args.max_objects_number))
+    radius_min = float(args.radius_min)
+    radius_max = float(args.radius_max)
+    overlap_margin = float(args.overlap_margin)
+    boundary_margin = float(args.boundary_margin)
+    ux_bc_value = float(args.ux_bc_value)
+    uy_bc_value = float(args.uy_bc_value)
+    source_mode = args.source_mode
+
+    if domain_max <= domain_min:
+        raise ValueError("domain_max must be greater than domain_min")
+    if radius_min <= 0.0 or radius_max <= 0.0 or radius_max < radius_min:
+        raise ValueError("Invalid radius range")
 
     os.makedirs(os.path.dirname(file_name) or ".", exist_ok=True)
 
     map_range = range(1, generated_maps_number + 1)
-    compute_fn = partial(compute_map_result, res=res)
+    compute_fn = partial(
+        compute_map_result,
+        res=res,
+        max_objects_number=max_objects_number,
+        domain_min=domain_min,
+        domain_max=domain_max,
+        radius_min=radius_min,
+        radius_max=radius_max,
+        overlap_margin=overlap_margin,
+        boundary_margin=boundary_margin,
+        ux_bc_value=ux_bc_value,
+        uy_bc_value=uy_bc_value,
+        source_mode=source_mode,
+    )
 
     if num_threads == 1:
         results_iter = map(compute_fn, map_range)
