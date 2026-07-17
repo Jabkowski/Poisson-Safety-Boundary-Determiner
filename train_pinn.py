@@ -451,9 +451,9 @@ def predict_safety_with_gradients(model, x, y):
 
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "training_data_128x128.h5"
-    WEIGHTS_PATH = "weights/double_poisson_unet_model.pth"
-
+    H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
+    WEIGHTS_PATH = "weights/double_poisson_unet_model_e40.pth"
+    GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -476,8 +476,8 @@ if __name__ == "__main__":
         full_dataset, [train_size, val_size]
     )
 
-    # Batch size ustawiony na 2 ze względu na wysokie zapotrzebowanie RAM/VRAM przy wymiarach 128x128
-    batch_size = 4
+    # Batch size ustawiony na 2 ze względu na wysokie zapotrzebowanie RAM/VRAM przy wymiarach GRID_SIZExGRID_SIZE
+    batch_size = 8
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True
     )
@@ -494,11 +494,11 @@ if __name__ == "__main__":
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 10
+    epochs = 40
     w_pde = 0.01
     w_bc = 0.1
     dx = (
-        10.0 / 128.0
+        10.0 / GRID_SIZE
     )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
 
     print(
@@ -530,7 +530,7 @@ if __name__ == "__main__":
 
             optimizer.zero_grad()
 
-            # Przejście w przód przez sieć splotową U-Net (zwraca [B, 3, 128, 128])
+            # Przejście w przód przez sieć splotową U-Net (zwraca [B, 3, GRID_SIZE, GRID_SIZE])
             pred_3ch = model(grid)
             h_pred = pred_3ch[
                 :, 2:3, :, :
@@ -590,6 +590,7 @@ if __name__ == "__main__":
         print(
             f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f}"
         )
+        
 
     # 4. Zapisanie wag modelu na dysku
     os.makedirs(os.path.dirname(WEIGHTS_PATH) or ".", exist_ok=True)
@@ -603,13 +604,13 @@ if __name__ == "__main__":
     )
     grid_tensor = grid.unsqueeze(0).to(
         device
-    )  # Dodanie wymiaru batcha [1, 1, 128, 128]
+    )  # Dodanie wymiaru batcha [1, 1, GRID_SIZE, GRID_SIZE]
 
     model.eval()
     with torch.no_grad():
         preds_3ch = (
             model(grid_tensor).cpu().numpy().squeeze(0)
-        )  # [3, 128, 128]
+        )  # [3, GRID_SIZE, GRID_SIZE]
 
     u_x_pred = preds_3ch[0]
     u_y_pred = preds_3ch[1]
@@ -626,8 +627,8 @@ if __name__ == "__main__":
     h_pred[~mask] = np.nan
     magnitude[~mask] = np.nan
 
-    x = np.linspace(-5, 5, 128)
-    y = np.linspace(-5, 5, 128)
+    x = np.linspace(-5, 5, int(GRID_SIZE))
+    y = np.linspace(-5, 5, int(GRID_SIZE))
     X, Y = np.meshgrid(x, y)
 
     plt.figure(figsize=(18, 5.5))
@@ -751,4 +752,4 @@ if __name__ == "__main__":
     plt.axis("equal")
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig("fig/unet_double_poisson_nikodemus.png", dpi=300)
