@@ -65,3 +65,4 @@ MATLAB:Java:GenericException
 ![Example](fig/pinn_5_epochs.png)
 ![Example](fig/pinn_15_epochs.png)
 ![Example](fig/pinn_output2.png)
+![Example](fig/pinn_output_40_epochs.png)
