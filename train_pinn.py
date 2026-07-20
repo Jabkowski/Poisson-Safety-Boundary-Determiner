@@ -9,6 +9,8 @@ from scipy.ndimage import binary_erosion, label, center_of_mass
 from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 
+from models.unet import UNet, UNetBilinear
+
 # Ustawienie ziarna losowości dla powtarzalności wyników
 torch.manual_seed(42)
 np.random.seed(42)
@@ -128,8 +130,10 @@ class UNetDoublePoisson(nn.Module):
 
     def __init__(self):
         super(UNetDoublePoisson, self).__init__()
-        self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
-        self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
+        self.u_net = UNetBilinear(in_channels=1, out_channels=2)
+        self.h_net = UNetBilinear(in_channels=2, out_channels=1)
+        # self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
+        # self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
 
     def forward(self, x):
         u = self.u_net(x)
@@ -449,10 +453,235 @@ def predict_safety_with_gradients(model, x, y):
     return h_val.item(), dh_dx, dh_dy
 
 
+def plot_poisson_prediction_example(
+    model,
+    grid,
+    grid_size,
+    device=None,
+    h_true=None,
+    ux_true=None,
+    uy_true=None,
+    save_path=None,
+    show=False,
+):
+    """Rysuje przykład predykcji dla jednej mapy testowej lub wejścia z inferencji."""
+    if device is None:
+        device = next(model.parameters()).device
+
+    def _to_numpy_2d(value):
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            array = value.detach().cpu().numpy()
+        else:
+            array = np.asarray(value)
+        return np.squeeze(array)
+
+    grid_np = _to_numpy_2d(grid)
+    if grid_np.ndim == 3:
+        grid_np = np.squeeze(grid_np, axis=0)
+
+    if isinstance(grid, torch.Tensor):
+        grid_tensor = grid.detach().clone()
+    else:
+        grid_tensor = torch.tensor(grid, dtype=torch.float32)
+
+    if grid_tensor.ndim == 2:
+        grid_tensor = grid_tensor.unsqueeze(0).unsqueeze(0)
+    elif grid_tensor.ndim == 3:
+        grid_tensor = grid_tensor.unsqueeze(0)
+
+    grid_tensor = grid_tensor.to(device)
+
+    model.eval()
+    with torch.no_grad():
+        preds_3ch = model(grid_tensor).cpu().numpy().squeeze(0)
+
+    u_x_pred = preds_3ch[0]
+    u_y_pred = preds_3ch[1]
+    h_pred = preds_3ch[2]
+    magnitude = np.sqrt(u_x_pred**2 + u_y_pred**2)
+
+    mask = grid_np == 0
+    u_x_pred = np.where(mask, u_x_pred, np.nan)
+    u_y_pred = np.where(mask, u_y_pred, np.nan)
+    h_pred = np.where(mask, h_pred, np.nan)
+    magnitude = np.where(mask, magnitude, np.nan)
+
+    x = np.linspace(-5, 5, int(grid_size))
+    y = np.linspace(-5, 5, int(grid_size))
+    X, Y = np.meshgrid(x, y)
+
+    has_reference = (
+        h_true is not None and ux_true is not None and uy_true is not None
+    )
+    fig, axes = plt.subplots(1, 4 if has_reference else 2, figsize=(18, 5.5))
+
+    if has_reference:
+        h_true_np = _to_numpy_2d(h_true)
+        ux_true_np = _to_numpy_2d(ux_true)
+        uy_true_np = _to_numpy_2d(uy_true)
+
+        ux_true_np = np.where(mask, ux_true_np, np.nan)
+        uy_true_np = np.where(mask, uy_true_np, np.nan)
+        h_true_np = np.where(mask, h_true_np, np.nan)
+
+        if ux_true_np.shape != X.shape and ux_true_np.T.shape == X.shape:
+            ux_true_np = ux_true_np.T
+            uy_true_np = uy_true_np.T
+
+        ax = axes[0]
+        cp1 = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+        fig.colorbar(cp1, ax=ax, label="Magnituda ||u||")
+        ax.streamplot(
+            X,
+            Y,
+            ux_true_np,
+            uy_true_np,
+            color="white",
+            linewidth=0.8,
+            density=1.0,
+        )
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+
+        ax = axes[1]
+        cp2 = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+        fig.colorbar(cp2, ax=ax, label="Magnituda ||u||")
+        u_x_plot = u_x_pred
+        u_y_plot = u_y_pred
+        if u_x_plot.shape != X.shape and u_x_plot.T.shape == X.shape:
+            u_x_plot = u_x_plot.T
+            u_y_plot = u_y_plot.T
+        ax.streamplot(
+            X,
+            Y,
+            u_x_plot,
+            u_y_plot,
+            color="white",
+            linewidth=0.8,
+            density=1.0,
+        )
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+
+        ax = axes[2]
+        cp3 = ax.contourf(X, Y, h_true_np, levels=50, cmap="plasma")
+        fig.colorbar(cp3, ax=ax, label="Wartość h_true")
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Referencyjna funkcja bezpieczeństwa\n(Rozwiązanie numeryczne z H5)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+
+        ax = axes[3]
+        cp4 = ax.contourf(X, Y, h_pred, levels=50, cmap="plasma")
+        fig.colorbar(cp4, ax=ax, label="Wartość h_pred")
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Wyznaczona funkcja bezpieczeństwa $h(x,y)$\n(Predykcja sieci UNetDoublePoisson)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+    else:
+        ax = axes[0]
+        cp1 = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+        fig.colorbar(cp1, ax=ax, label="Magnituda ||u||")
+        ax.streamplot(
+            X,
+            Y,
+            u_x_pred,
+            u_y_pred,
+            color="white",
+            linewidth=0.8,
+            density=1.0,
+        )
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+
+        ax = axes[1]
+        cp2 = ax.contourf(X, Y, h_pred, levels=50, cmap="plasma")
+        fig.colorbar(cp2, ax=ax, label="Wartość h_pred")
+        ax.imshow(
+            grid_np,
+            origin="lower",
+            extent=[-5, 5, -5, 5],
+            cmap="gray_r",
+            alpha=0.3,
+        )
+        ax.set_title(
+            "Wyznaczona funkcja bezpieczeństwa $h(x,y)$\n(Predykcja sieci UNetDoublePoisson)"
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.axis("equal")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
+
+
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
-    WEIGHTS_PATH = "weights/double_poisson_unet_model_e40.pth"
+    H5_FILE_PATH = "data/nik_training_data_512x512_50.h5"
+    WEIGHTS_PATH = "weights/python_base_data_double_poisson_unet_bilinear_model_512x512_test.pth"
     GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -504,6 +733,7 @@ if __name__ == "__main__":
     print(
         "\nRozpoczynanie treningu splotowej sieci UNetDoublePoisson na wszystkich mapach..."
     )
+    prev_epoch = 0
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -557,16 +787,21 @@ if __name__ == "__main__":
 
             # Całkowita hybrydowa strata (Dane + Fizyka)
             loss = loss_data + w_pde * pde_loss + w_bc * bc_loss
+            if prev_epoch != epoch:
+                print(f"ld: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}")
 
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
+            prev_epoch = epoch
 
         # --- Walidacja po każdej epoce ---
         model.eval()
         val_loss = 0.0
+        val_pde_loss = 0.0
+        val_bc_loss = 0.0
         with torch.no_grad():
             for (
                 grid_val,
@@ -587,8 +822,22 @@ if __name__ == "__main__":
                 h_val_pred = pred_val[:, 2:3, :, :]
                 val_loss += criterion(h_val_pred, h_val_true).item()
 
+                pde_val, _, bc_val, _, _ = calc_poisson_pinn_loss(
+                    pred_val,
+                    h_val_true,
+                    dhdx_val_true,
+                    dhdy_val_true,
+                    ux_val_true,
+                    uy_val_true,
+                    grid_val,
+                    dx=dx,
+                    detach_u=True,
+                )
+                val_pde_loss += pde_val.item()
+                val_bc_loss += bc_val.item()
+
         print(
-            f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f}"
+            f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f} | Walidacja (PDE): {val_pde_loss / len(val_loader):.6f} | Walidacja (BC): {val_bc_loss / len(val_loader):.6f}"
         )
         
 
@@ -599,157 +848,15 @@ if __name__ == "__main__":
 
     # --- 5. WIZUALIZACJA WYNIKÓW DLA PIERWSZEJ MAPY TESTOWEJ ---
     print("\nGenerowanie wykresu końcowego dla wybranej mapy...")
-    grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = (
-        val_dataset[0]
+    grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
+    plot_poisson_prediction_example(
+        model,
+        grid,
+        grid_size=GRID_SIZE,
+        device=device,
+        h_true=h_true,
+        ux_true=ux_true,
+        uy_true=uy_true,
+        save_path="fig/unet_double_poisson_nikodemus_512x512_test_50.png",
+        show=False,
     )
-    grid_tensor = grid.unsqueeze(0).to(
-        device
-    )  # Dodanie wymiaru batcha [1, 1, GRID_SIZE, GRID_SIZE]
-
-    model.eval()
-    with torch.no_grad():
-        preds_3ch = (
-            model(grid_tensor).cpu().numpy().squeeze(0)
-        )  # [3, GRID_SIZE, GRID_SIZE]
-
-    u_x_pred = preds_3ch[0]
-    u_y_pred = preds_3ch[1]
-    h_pred = preds_3ch[2]
-
-    grid_np = grid.squeeze().numpy()
-    h_true_np = h_true.squeeze().numpy()
-    magnitude = np.sqrt(u_x_pred**2 + u_y_pred**2)
-
-    # Zamaskowanie wnętrza przeszkód do rysowania
-    mask = grid_np == 0
-    u_x_pred[~mask] = np.nan
-    u_y_pred[~mask] = np.nan
-    h_pred[~mask] = np.nan
-    magnitude[~mask] = np.nan
-
-    x = np.linspace(-5, 5, int(GRID_SIZE))
-    y = np.linspace(-5, 5, int(GRID_SIZE))
-    X, Y = np.meshgrid(x, y)
-
-    plt.figure(figsize=(18, 5.5))
-
-    # Panel 0: Harmonijny potencjał u (referencyjne)
-    plt.subplot(1, 4, 1)
-    cp1 = plt.contourf(X, Y, magnitude, levels=50, cmap="viridis")
-    plt.colorbar(cp1, label="Magnituda ||u||")
-    # Przygotuj wektory referencyjne z dataset (zamień na numpy i dopasuj kształt)
-    ux_true_np = (
-        ux_true.squeeze().cpu().numpy()
-        if isinstance(ux_true, torch.Tensor)
-        else np.array(ux_true)
-    )
-    uy_true_np = (
-        uy_true.squeeze().cpu().numpy()
-        if isinstance(uy_true, torch.Tensor)
-        else np.array(uy_true)
-    )
-    # Zamaskowanie obszarów poza wolną przestrzenią
-    ux_true_np[~mask] = np.nan
-    uy_true_np[~mask] = np.nan
-    # Transponuj je gdy trzeba, aby dopasować X,Y
-    if ux_true_np.shape != X.shape:
-        if ux_true_np.T.shape == X.shape:
-            ux_true_np = ux_true_np.T
-            uy_true_np = uy_true_np.T
-    plt.streamplot(
-        X,
-        Y,
-        ux_true_np,
-        uy_true_np,
-        color="white",
-        linewidth=0.8,
-        density=1.0,
-    )
-    plt.imshow(
-        grid_np,
-        origin="lower",
-        extent=[-5, 5, -5, 5],
-        cmap="gray_r",
-        alpha=0.3,
-    )
-    plt.title(
-        "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
-    )
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.axis("equal")
-
-    # Panel 1: Harmonijny potencjał u
-    plt.subplot(1, 4, 2)
-    cp1 = plt.contourf(X, Y, magnitude, levels=50, cmap="viridis")
-    plt.colorbar(cp1, label="Magnituda ||u||")
-    # Streamplot do wizualizacji kierunków
-    # Upewnij się, że macierze wektorów mają ten sam kształt co X, Y
-    u_x_plot = u_x_pred
-    u_y_plot = u_y_pred
-    if u_x_plot.shape != X.shape:
-        if u_x_plot.T.shape == X.shape:
-            u_x_plot = u_x_plot.T
-            u_y_plot = u_y_plot.T
-    # Co 4 punkty do poprawnego rysowania wektorów
-    plt.streamplot(
-        X,
-        Y,
-        u_x_plot,
-        u_y_plot,
-        color="white",
-        linewidth=0.8,
-        density=1.0,
-    )
-    plt.imshow(
-        grid_np,
-        origin="lower",
-        extent=[-5, 5, -5, 5],
-        cmap="gray_r",
-        alpha=0.3,
-    )
-    plt.title(
-        "Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)"
-    )
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.axis("equal")
-
-    # Panel 2: Referencyjne H z pliku H5
-    plt.subplot(1, 4, 3)
-    cp2 = plt.contourf(X, Y, h_true_np, levels=50, cmap="plasma")
-    plt.colorbar(cp2, label="Wartość h_true")
-    plt.imshow(
-        grid_np,
-        origin="lower",
-        extent=[-5, 5, -5, 5],
-        cmap="gray_r",
-        alpha=0.3,
-    )
-    plt.title(
-        "Referencyjna funkcja bezpieczeństwa\n(Rozwiązanie numeryczne z H5)"
-    )
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.axis("equal")
-
-    # Panel 3: Predykcja sieci neuronowej H_pred
-    plt.subplot(1, 4, 4)
-    cp3 = plt.contourf(X, Y, h_pred, levels=50, cmap="plasma")
-    plt.colorbar(cp3, label="Wartość h_pred")
-    plt.imshow(
-        grid_np,
-        origin="lower",
-        extent=[-5, 5, -5, 5],
-        cmap="gray_r",
-        alpha=0.3,
-    )
-    plt.title(
-        "Wyznaczona funkcja bezpieczeństwa $h(x,y)$\n(Predykcja sieci UNetDoublePoisson)"
-    )
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.axis("equal")
-
-    plt.tight_layout()
-    plt.savefig("fig/unet_double_poisson_nikodemus.png", dpi=300)

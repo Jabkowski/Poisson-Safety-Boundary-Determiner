@@ -1,53 +1,162 @@
+import argparse
+import os
+
 import h5py
-import numpy as np
 import matplotlib.pyplot as plt
-
-data = {}
-
-
-def parse_tree(obj, indent=0, current=None):
-    if current is None:
-        current = data
-
-    for key in obj:
-        item = obj[key]
-        if isinstance(item, h5py.Group):
-            current[key] = {}
-            parse_tree(item, indent + 1, current=current[key])
-        else:
-            # store dataset as a numpy array in the current group's dict
-            current[key] = np.asarray(item[()])
+import numpy as np
 
 
-def plot_data(types=None):
-    if types is None:
-        types = ["grid", "dhdx", "dhdy", "h"]
+DEFAULT_DATA_PATH = "nik_training_data_128x128_5.h5"
 
-    grid_d = data[types[0]]
-    dhdx_d = data[types[1]]
-    dhdy_d = data[types[2]]
-    h_d = data[types[3]]
+DEFAULT_EXTENT = (-5.0, 5.0, -5.0, 5.0)
 
-    keys = list(grid_d.keys())
-    arr_grid_d = grid_d[keys[0]]
-    arr_dhdx_d = dhdx_d[keys[0]]
-    arr_dhdy_d = dhdy_d[keys[0]]
-    arr_h_d = h_d[keys[0]]
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    axes[0, 0].imshow(arr_grid_d)
-    axes[0, 0].set_title("grid")
-    axes[0, 1].imshow(arr_dhdx_d, cmap="gray")
-    axes[0, 1].set_title("dhdx")
-    axes[1, 0].imshow(arr_dhdy_d, cmap="gray")
-    axes[1, 0].set_title("dhdy")
-    axes[1, 1].imshow(arr_h_d)
-    axes[1, 1].set_title("h")
+def _to_2d(value):
+    array = np.asarray(value)
+    array = np.squeeze(array)
+
+    while array.ndim > 2:
+        array = array[0]
+
+    return array
+
+
+def _read_first_sample(file_path, sample_index=0):
+    with h5py.File(file_path, "r") as handle:
+        keys = sorted(handle["grid"].keys())
+        if not keys:
+            raise ValueError(f"No samples found in {file_path}")
+
+        sample_key = keys[sample_index]
+        grid = _to_2d(handle["grid"][sample_key][()])
+        h_true = _to_2d(handle["h"][sample_key][()])
+        ux_true = _to_2d(handle["u_x"][sample_key][()])
+        uy_true = _to_2d(handle["u_y"][sample_key][()])
+
+    return grid, h_true, ux_true, uy_true, sample_key
+
+
+def plot_poisson_reference_example(
+    grid,
+    h_true,
+    ux_true,
+    uy_true,
+    save_path=None,
+    show=False,
+    extent=DEFAULT_EXTENT,
+):
+    """Plot the real vector field and the reference safety function for one sample."""
+    grid = _to_2d(grid)
+    h_true = _to_2d(h_true)
+    ux_true = _to_2d(ux_true)
+    uy_true = _to_2d(uy_true)
+
+    if grid.shape != h_true.shape:
+        raise ValueError(
+            f"grid and h_true must have the same shape, got {grid.shape} and {h_true.shape}"
+        )
+
+    x_min, x_max, y_min, y_max = extent
+    x = np.linspace(x_min, x_max, grid.shape[1])
+    y = np.linspace(y_min, y_max, grid.shape[0])
+    X, Y = np.meshgrid(x, y)
+
+    mask = grid == 0
+    magnitude = np.sqrt(ux_true**2 + uy_true**2)
+
+    ux_plot = np.where(mask, ux_true, np.nan)
+    uy_plot = np.where(mask, uy_true, np.nan)
+    h_plot = np.where(mask, h_true, np.nan)
+    magnitude = np.where(mask, magnitude, np.nan)
+
+    if ux_plot.shape != X.shape and ux_plot.T.shape == X.shape:
+        ux_plot = ux_plot.T
+        uy_plot = uy_plot.T
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    ax = axes[0]
+    contour = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+    fig.colorbar(contour, ax=ax, label="Magnituda ||u||")
+    ax.streamplot(
+        X,
+        Y,
+        ux_plot,
+        uy_plot,
+        color="white",
+        linewidth=0.8,
+        density=1.0,
+    )
+    ax.imshow(
+        grid,
+        origin="lower",
+        extent=[x_min, x_max, y_min, y_max],
+        cmap="gray_r",
+        alpha=0.3,
+    )
+    ax.set_title("Zharmonizowane pole odpychania $\\mathbf{u}$\n(Streamlines & Magnituda)")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.axis("equal")
+
+    ax = axes[1]
+    contour = ax.contourf(X, Y, h_plot, levels=50, cmap="plasma")
+    fig.colorbar(contour, ax=ax, label="Wartość h")
+    ax.imshow(
+        grid,
+        origin="lower",
+        extent=[x_min, x_max, y_min, y_max],
+        cmap="gray_r",
+        alpha=0.3,
+    )
+    ax.set_title("Referencyjna funkcja bezpieczeństwa\n(Rozwiązanie numeryczne z H5)")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.axis("equal")
+
     plt.tight_layout()
-    plt.show()
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
 
 
-with h5py.File("training_data_512x512.h5", "r") as f:
-    parse_tree(f)
-    print("Collected groups:", list(data.keys()))
-    plot_data(types=["grid", "dhdx", "dhdy", "h"])
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Plot the first H5 sample with the same style used in training, but without model predictions."
+    )
+    parser.add_argument("--data-path", default=DEFAULT_DATA_PATH)
+    parser.add_argument("--sample-index", type=int, default=2)
+    parser.add_argument("--show", action="store_true")
+    return parser
+
+
+def main():
+    args = build_arg_parser().parse_args()
+    grid, h_true, ux_true, uy_true, sample_key = _read_first_sample(
+        args.data_path,
+        sample_index=args.sample_index,
+    )
+    tmp_path = args.data_path.replace(".h5", f"_sample_{args.sample_index}.png")
+    save_path = os.path.join("fig", os.path.split(tmp_path)[-1].replace("data", "fig"))
+    print(f"Loaded sample {sample_key} from {args.data_path}")
+    plot_poisson_reference_example(
+        grid,
+        h_true,
+        ux_true,
+        uy_true,
+        save_path=save_path,
+        show=args.show,
+    )
+    print(f"Saved plot to {save_path}")
+
+
+if __name__ == "__main__":
+    main()
