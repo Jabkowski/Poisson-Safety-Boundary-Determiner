@@ -350,6 +350,15 @@ def calc_poisson_pinn_loss(
     loss_ux_data = F.mse_loss(u_x, ux_true)
     loss_uy_data = F.mse_loss(u_y, uy_true)
 
+    # Add after computing losses, before returning
+    # Normalize PDE loss by dx² to make it resolution-independent
+    pde_loss = pde_loss * (dx**2)  # Scale back the 1/dx² explosion
+
+    # Normalize gradient data losses similarly
+    loss_dhdx_data = loss_dhdx_data * (dx**2)
+    loss_dhdy_data = loss_dhdy_data * (dx**2)
+    loss_ux_data = loss_ux_data * (dx**2)  
+    loss_uy_data = loss_uy_data * (dx**2)
     value_data_loss = (
         loss_h_data
         + loss_dhdx_data
@@ -680,8 +689,8 @@ def plot_poisson_prediction_example(
 
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "data/nik_training_data_512x512_50.h5"
-    WEIGHTS_PATH = "weights/python_base_data_double_poisson_unet_bilinear_model_512x512_test.pth"
+    H5_FILE_PATH = "data/nik_training_data_512x512_1000.h5"
+    WEIGHTS_PATH = "weights/python_base_data_double_poisson_unet_bilinear_model_512x512_1000_e40.pth"
     GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -706,7 +715,7 @@ if __name__ == "__main__":
     )
 
     # Batch size ustawiony na 2 ze względu na wysokie zapotrzebowanie RAM/VRAM przy wymiarach GRID_SIZExGRID_SIZE
-    batch_size = 8
+    batch_size = 1
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True
     )
@@ -721,11 +730,11 @@ if __name__ == "__main__":
     # 3. Inicjalizacja sieci splotowej UNetDoublePoisson i optymalizatora
     model = UNetDoublePoisson().to(device)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5*1e-5)
 
     epochs = 40
-    w_pde = 0.01
-    w_bc = 0.1
+    w_pde = 0.1
+    w_bc = 1
     dx = (
         10.0 / GRID_SIZE
     )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
@@ -784,7 +793,6 @@ if __name__ == "__main__":
                 dx=dx,
                 detach_u=True,
             )
-
             # Całkowita hybrydowa strata (Dane + Fizyka)
             loss = loss_data + w_pde * pde_loss + w_bc * bc_loss
             if prev_epoch != epoch:
@@ -802,6 +810,7 @@ if __name__ == "__main__":
         val_loss = 0.0
         val_pde_loss = 0.0
         val_bc_loss = 0.0
+        val_idx=0
         with torch.no_grad():
             for (
                 grid_val,
@@ -835,9 +844,33 @@ if __name__ == "__main__":
                 )
                 val_pde_loss += pde_val.item()
                 val_bc_loss += bc_val.item()
-
+                
+                # plot_poisson_prediction_example(
+                # model,
+                # grid_val[0],
+                # grid_size=GRID_SIZE,
+                # device=device,
+                # h_true=h_val_true[0],
+                # ux_true=ux_val_true[0],
+                # uy_true=uy_val_true[0],
+                # save_path=f"fig/val_double_poisson_nikodemus_512x512_test_{val_idx}_{epoch + 1:02d}.png",
+                # show=False,
+                # )
+                # val_idx += 1
         print(
             f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f} | Walidacja (PDE): {val_pde_loss / len(val_loader):.6f} | Walidacja (BC): {val_bc_loss / len(val_loader):.6f}"
+        )
+        grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
+        plot_poisson_prediction_example(
+            model,
+            grid,
+            grid_size=GRID_SIZE,
+            device=device,
+            h_true=h_true,
+            ux_true=ux_true,
+            uy_true=uy_true,
+            save_path="fig/unet_double_poisson_nikodemus_512x512_1000_e40_test.png",
+            show=False,
         )
         
 
@@ -857,6 +890,6 @@ if __name__ == "__main__":
         h_true=h_true,
         ux_true=ux_true,
         uy_true=uy_true,
-        save_path="fig/unet_double_poisson_nikodemus_512x512_test_50.png",
+        save_path="fig/unet_double_poisson_nikodemus_512x512_test_1000.png",
         show=False,
     )
