@@ -308,7 +308,7 @@ def save_occupancy_image_as_h5(occupancy_image, path):
 
     # Convert to 0/1 uint8
     grid = np.array(
-        [[1 if pixel == 255 else 0 for pixel in row] for row in occupancy_image],
+        [[1 if pixel == 0 else 0 for pixel in row] for row in occupancy_image],
         dtype=np.uint8,
     )
 

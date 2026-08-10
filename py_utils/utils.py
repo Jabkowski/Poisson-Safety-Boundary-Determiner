@@ -4,6 +4,127 @@ import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import os
+
+
+def _to_2d(value):
+    """Convert array to 2D by squeezing and taking first element if needed."""
+    array = np.asarray(value)
+    array = np.squeeze(array)
+
+    while array.ndim > 2:
+        array = array[0]
+
+    return array
+
+
+def plot_poisson_pinn_example(
+    grid,
+    h,
+    ux,
+    uy,
+    save_path=None,
+    show=False,
+    extent=(-5.0, 5.0, -5.0, 5.0),
+    label="Predykcja",
+):
+    """
+    Plot vector field u and safety function h for one sample.
+    
+    Args:
+        grid: Occupancy grid (2D or 3D array)
+        h: Safety function (2D or 3D array)
+        ux: X-component of velocity/repulsive field (2D or 3D array)
+        uy: Y-component of velocity/repulsive field (2D or 3D array)
+        save_path: Path to save the figure (optional)
+        show: Whether to display the figure (default: False)
+        extent: Plot extent as (x_min, x_max, y_min, y_max)
+        label: Label prefix for plot titles ("Predykcja" or "Referencyjna")
+    
+    Returns:
+        fig: Matplotlib figure object
+    """
+    grid = _to_2d(grid)
+    h = _to_2d(h)
+    ux = _to_2d(ux)
+    uy = _to_2d(uy)
+
+    if grid.shape != h.shape:
+        raise ValueError(
+            f"grid and h must have the same shape, got {grid.shape} and {h.shape}"
+        )
+
+    x_min, x_max, y_min, y_max = extent
+    x = np.linspace(x_min, x_max, grid.shape[1])
+    y = np.linspace(y_min, y_max, grid.shape[0])
+    X, Y = np.meshgrid(x, y)
+
+    mask = grid == 0
+    magnitude = np.sqrt(ux**2 + uy**2)
+
+    ux_plot = np.where(mask, ux, np.nan)
+    uy_plot = np.where(mask, uy, np.nan)
+    h_plot = np.where(mask, h, np.nan)
+    magnitude = np.where(mask, magnitude, np.nan)
+
+    if ux_plot.shape != X.shape and ux_plot.T.shape == X.shape:
+        ux_plot = ux_plot.T
+        uy_plot = uy_plot.T
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    ax = axes[0]
+    contour = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
+    fig.colorbar(contour, ax=ax, label="Magnituda ||u||")
+    ax.streamplot(
+        X,
+        Y,
+        ux_plot,
+        uy_plot,
+        color="white",
+        linewidth=0.8,
+        density=1.0,
+    )
+    ax.imshow(
+        grid,
+        origin="lower",
+        extent=[x_min, x_max, y_min, y_max],
+        cmap="gray_r",
+        alpha=0.3,
+    )
+    ax.set_title(f"{label} pola odpychania $\\mathbf{{u}}$\n(Streamlines & Magnituda)")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.axis("equal")
+
+    ax = axes[1]
+    contour = ax.contourf(X, Y, h_plot, levels=50, cmap="plasma")
+    fig.colorbar(contour, ax=ax, label="Wartość h")
+    ax.imshow(
+        grid,
+        origin="lower",
+        extent=[x_min, x_max, y_min, y_max],
+        cmap="gray_r",
+        alpha=0.3,
+    )
+    ax.set_title(f"{label} funkcji bezpieczeństwa $h(x,y)$")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.axis("equal")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
 
 
 def gradients(h):

@@ -134,6 +134,7 @@ class UNetDoublePoisson(nn.Module):
         self.h_net = UNetBilinear(in_channels=2, out_channels=1)
         # self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
         # self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
+        # self.h_net = UNet(in_channels=2, out_channels=1)
 
     def forward(self, x):
         u = self.u_net(x)
@@ -690,7 +691,7 @@ def plot_poisson_prediction_example(
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
     H5_FILE_PATH = "data/nik_training_data_512x512_1000.h5"
-    WEIGHTS_PATH = "weights/python_base_data_double_poisson_unet_bilinear_model_512x512_1000_e40.pth"
+    WEIGHTS_PATH = "weights/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.pth"
     GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -730,11 +731,12 @@ if __name__ == "__main__":
     # 3. Inicjalizacja sieci splotowej UNetDoublePoisson i optymalizatora
     model = UNetDoublePoisson().to(device)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=5*1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 40
-    w_pde = 0.1
+    epochs = 30
+    w_pde = 0.01
     w_bc = 1
+    w_mse = 1
     dx = (
         10.0 / GRID_SIZE
     )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
@@ -794,9 +796,9 @@ if __name__ == "__main__":
                 detach_u=True,
             )
             # Całkowita hybrydowa strata (Dane + Fizyka)
-            loss = loss_data + w_pde * pde_loss + w_bc * bc_loss
+            loss = w_mse*loss_data + w_pde * pde_loss + w_bc * bc_loss
             if prev_epoch != epoch:
-                print(f"ld: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}")
+                print(f"lmse: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}, total: {loss}")
 
             loss.backward()
             optimizer.step()
@@ -861,17 +863,17 @@ if __name__ == "__main__":
             f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f} | Walidacja (PDE): {val_pde_loss / len(val_loader):.6f} | Walidacja (BC): {val_bc_loss / len(val_loader):.6f}"
         )
         grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
-        plot_poisson_prediction_example(
-            model,
-            grid,
-            grid_size=GRID_SIZE,
-            device=device,
-            h_true=h_true,
-            ux_true=ux_true,
-            uy_true=uy_true,
-            save_path="fig/unet_double_poisson_nikodemus_512x512_1000_e40_test.png",
-            show=False,
-        )
+        # plot_poisson_prediction_example(
+        #     model,
+        #     grid,
+        #     grid_size=GRID_SIZE,
+        #     device=device,
+        #     h_true=h_true,
+        #     ux_true=ux_true,
+        #     uy_true=uy_true,
+        #     save_path="fig/poisson_unet_bilinear_model_512x512_1000_e20.png",
+        #     show=False,
+        # )
         
 
     # 4. Zapisanie wag modelu na dysku
@@ -890,6 +892,6 @@ if __name__ == "__main__":
         h_true=h_true,
         ux_true=ux_true,
         uy_true=uy_true,
-        save_path="fig/unet_double_poisson_nikodemus_512x512_test_1000.png",
+        save_path="fig/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.png",
         show=False,
     )
