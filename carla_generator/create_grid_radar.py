@@ -7,6 +7,7 @@
 # top-down semantic segmentation camera (BEV) at 512x512.
 
 import argparse
+import math
 
 import h5py
 import logging
@@ -14,6 +15,7 @@ import random
 import os
 
 import carla
+from occupancy_grid_map import OccupancyGridMap
 
 try:
     import pygame
@@ -208,7 +210,7 @@ def spawn_ego_vehicle(world, blueprint):
 
 
 # Radar BEV parameters
-RADAR_RANGE_M = 50.0   # metres shown in half-image height
+RADAR_RANGE_M = 60.0   # metres shown in half-image height
 BEV_SIZE = 512         # pixels
 
 # (location_x, location_y, yaw_deg, display_color_rgb)
@@ -218,6 +220,29 @@ _RADAR_CONFIGS = [
     (-2.0, -1.0, -135.0, (255, 165,   0)),   # rear-left
     (-2.0,  1.0,  135.0, ( 60, 200,  60)),   # rear-right
 ]
+
+
+def spawn_npc_vehicles(world, traffic_manager, count: int = 30):
+    """Spawn NPC vehicles managed by the Traffic Manager."""
+    blueprints = world.get_blueprint_library().filter("vehicle.*")
+    # Exclude bikes/motorbikes for cleaner radar returns
+    blueprints = [b for b in blueprints if int(b.get_attribute("number_of_wheels")) >= 4]
+
+    spawn_points = world.get_map().get_spawn_points()
+    random.shuffle(spawn_points)
+
+    npcs = []
+    for transform in spawn_points[:count]:
+        bp = random.choice(blueprints)
+        if bp.has_attribute("color"):
+            bp.set_attribute("color", random.choice(bp.get_attribute("color").recommended_values))
+        npc = world.try_spawn_actor(bp, transform)
+        if npc is not None:
+            npc.set_autopilot(True, traffic_manager.get_port())
+            npcs.append(npc)
+
+    logging.info("Spawned %d NPC vehicles", len(npcs))
+    return npcs
 
 
 def create_sensors(world, ego_vehicle):
@@ -267,15 +292,10 @@ def draw_dashboard(display, font, real_fps, sim_fps, autopilot):
 
 
 def radar_to_bev(radar_datasets):
-    """Project 4-radar detections onto a BEV image (512x512, ego at centre).
+    """Single-frame scatter-plot BEV, colour-coded per radar."""
+    bev = np.ones((BEV_SIZE, BEV_SIZE, 3), dtype=np.uint8) * 30
 
-    radar_datasets: list of (carla.RadarMeasurement, yaw_deg, color_rgb) per radar.
-    Detections are rotated from radar-local frame to vehicle frame before projection.
-    Forward (x) maps to up, lateral (y) maps to right.  No accumulation.
-    """
-    bev = np.ones((BEV_SIZE, BEV_SIZE, 3), dtype=np.uint8) * 30  # dark background
-
-    scale = (BEV_SIZE / 2.0) / RADAR_RANGE_M  # pixels per metre
+    scale = (BEV_SIZE / 2.0) / RADAR_RANGE_M
     cx = BEV_SIZE // 2
     cy = BEV_SIZE // 2
 
@@ -285,22 +305,19 @@ def radar_to_bev(radar_datasets):
         sin_y = np.sin(yaw_rad)
 
         for detection in radar_data:
-            # Detection in radar-local frame (X = radar forward, Y = radar right)
             horiz = detection.depth * np.cos(detection.altitude)
             x_local = horiz * np.cos(detection.azimuth)
             y_local = horiz * np.sin(detection.azimuth)
 
-            # Rotate to vehicle frame
             fwd = x_local * cos_y - y_local * sin_y
             lat = x_local * sin_y + y_local * cos_y
 
             px = int(cx + lat * scale)
-            py = int(cy - fwd * scale)  # forward = up in image
+            py = int(cy - fwd * scale)
 
             if 0 <= px < BEV_SIZE and 0 <= py < BEV_SIZE:
                 bev[max(0, py - 2) : py + 2, max(0, px - 2) : px + 2] = color
 
-    # Draw ego marker
     bev[cy - 4 : cy + 4, cx - 4 : cx + 4] = (255, 255, 255)
     return bev
 
@@ -345,7 +362,7 @@ def run(args):
 
     pygame.init()
     pygame.font.init()
-    display = pygame.display.set_mode((1024, 512), pygame.HWSURFACE | pygame.DOUBLEBUF)
+    display = pygame.display.set_mode((1536, 512), pygame.HWSURFACE | pygame.DOUBLEBUF)
     font = pygame.font.Font(pygame.font.get_default_font(), 16)
     clock = pygame.time.Clock()
 
@@ -373,8 +390,21 @@ def run(args):
 
         controller = KeyboardController(ego_vehicle)
 
+        npc_vehicles = spawn_npc_vehicles(world, traffic_manager, args.num_npcs)
+        actors.extend(npc_vehicles)
+
         rgb_camera, radars = create_sensors(world, ego_vehicle)
         actors.extend([rgb_camera] + radars)
+
+        ogm = OccupancyGridMap(
+            map_width_m=60.0,
+            map_height_m=60.0,
+            resolution=0.4,
+            decay_rate=6.0,
+            hit_increment=15.0,
+            max_confidence=100.0,
+            range_rate_threshold=0.15,
+        )
 
         traffic_manager.set_synchronous_mode(True)
         idx = 0
@@ -392,18 +422,59 @@ def run(args):
                 snapshot, rgb_image = tick_data[0], tick_data[1]
                 radar_measurements = tick_data[2:]  # one per corner radar
 
+                # Ego pose and velocity in world frame
+                ego_t = ego_vehicle.get_transform()
+                ego_x = ego_t.location.x
+                ego_y = ego_t.location.y
+                ego_yaw = math.radians(ego_t.rotation.yaw)
+                cos_e, sin_e = math.cos(ego_yaw), math.sin(ego_yaw)
+                ego_vel = ego_vehicle.get_velocity()
+
+                ogm.update_origin(ego_x, ego_y)
+
+                for meas, (lx, ly, yaw_deg, _) in zip(radar_measurements, _RADAR_CONFIGS):
+                    cos_r = math.cos(math.radians(yaw_deg))
+                    sin_r = math.sin(math.radians(yaw_deg))
+
+                    for det in meas:
+                        horiz = det.depth * math.cos(det.altitude)
+                        xl = horiz * math.cos(det.azimuth)
+                        yl = horiz * math.sin(det.azimuth)
+
+                        # radar-local → vehicle frame (include mount offset)
+                        xv = xl * cos_r - yl * sin_r + lx
+                        yv = xl * sin_r + yl * cos_r + ly
+
+                        # vehicle frame → world frame
+                        wx = ego_x + xv * cos_e - yv * sin_e
+                        wy = ego_y + xv * sin_e + yv * cos_e
+
+                        rr = OccupancyGridMap.compensate_range_rate(
+                            det.velocity, wx, wy,
+                            ego_x, ego_y, ego_vel.x, ego_vel.y,
+                        )
+                        ogm.add_hit(wx, wy, rr)
+
+                ogm.apply_decay(dt=frame_ms / 200.0)
+
+                rgb_image.convert(carla.ColorConverter.Raw)
+                bev_image = ogm.get_ego_centric_bev(
+                    ego_x, ego_y, ego_yaw, RADAR_RANGE_M, (BEV_SIZE, BEV_SIZE)
+                )
+
                 radar_datasets = [
                     (meas, cfg[2], cfg[3])
                     for meas, cfg in zip(radar_measurements, _RADAR_CONFIGS)
                 ]
+                scatter_image = radar_to_bev(radar_datasets)
 
-                rgb_image.convert(carla.ColorConverter.Raw)
-                bev_image = radar_to_bev(radar_datasets)
-                rgb_surface = image_to_surface(rgb_image)
-                bev_surface = image_to_surface(bev_image)
+                rgb_surface     = image_to_surface(rgb_image)
+                bev_surface     = image_to_surface(bev_image)
+                scatter_surface = image_to_surface(scatter_image)
 
-                display.blit(rgb_surface, (0, 0))
-                display.blit(bev_surface, (512, 0))
+                display.blit(rgb_surface,     (0,    0))
+                display.blit(bev_surface,     (512,  0))
+                display.blit(scatter_surface, (1024, 0))
 
                 real_fps = clock.get_fps()
                 sim_fps = (
@@ -416,7 +487,8 @@ def run(args):
                 )
                 if controller.record_grid:
                     save_radar_detections_as_h5(
-                        radar_datasets,
+                        [(meas, yaw, color) for meas, (_, _, yaw, color) in
+                         zip(radar_measurements, _RADAR_CONFIGS)],
                         "/home/xk2qmc/CARLA/CARLA_0.9.16/semantic_grid_generator/grids",
                     )
                 idx += 1
@@ -457,6 +529,12 @@ def main():
         default=8000,
         type=int,
         help="Traffic Manager port (default: 8000)",
+    )
+    argparser.add_argument(
+        "--num-npcs",
+        default=30,
+        type=int,
+        help="Number of NPC vehicles to spawn (default: 30)",
     )
     argparser.add_argument(
         "--filter",
