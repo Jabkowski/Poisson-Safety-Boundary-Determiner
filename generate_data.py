@@ -43,11 +43,21 @@ def solve_laplace_and_poisson(
     obstacle_id_map = -np.ones((ny, nx), dtype=int)
     centers = {}
 
-    for idx_obj, obj in enumerate(objects_list):
+    def compute_object_mask(obj):
         cx, cy = float(obj["c"][0]), float(obj["c"][1])
+        if obj.get("type", "circle") in ("rect", "rectangle"):
+            hx, hy = float(obj["size"][0]), float(obj["size"][1])
+            return (np.abs(X - cx) <= hx + 1e-12) & (
+                np.abs(Y - cy) <= hy + 1e-12
+            )
+
         r = float(obj["r"])
         dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-        in_obstacle = dist <= r + 1e-12
+        return dist <= r + 1e-12
+
+    for idx_obj, obj in enumerate(objects_list):
+        cx, cy = float(obj["c"][0]), float(obj["c"][1])
+        in_obstacle = compute_object_mask(obj)
         mask |= in_obstacle
         obstacle_id_map[in_obstacle] = idx_obj
         centers[idx_obj] = (cx, cy)
@@ -81,7 +91,9 @@ def solve_laplace_and_poisson(
     main_diag = -2.0 * inv_dx2 * np.ones(n)
     off_diag = inv_dx2 * np.ones(n - 1)
     D2 = sparse.diags(
-        [off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format="csr"
+        [off_diag, main_diag, off_diag],
+        offsets=[-1, 0, 1],
+        format="csr",
     )
     I_n = sparse.identity(n, format="csr")
     # Laplasjan pełnej siatki (indeks płaski: idx = j * nx + i)
@@ -99,8 +111,12 @@ def solve_laplace_and_poisson(
     val_ux_full = np.zeros((ny, nx), dtype=np.float64)
     val_uy_full = np.zeros((ny, nx), dtype=np.float64)
     if objects_list:
-        cx_arr = np.array([centers[i][0] for i in range(len(objects_list))])
-        cy_arr = np.array([centers[i][1] for i in range(len(objects_list))])
+        cx_arr = np.array(
+            [centers[i][0] for i in range(len(objects_list))]
+        )
+        cy_arr = np.array(
+            [centers[i][1] for i in range(len(objects_list))]
+        )
         obj_ids = obstacle_id_map[mask]
         val_ux_full[mask] = X[mask] - cx_arr[obj_ids]
         val_uy_full[mask] = Y[mask] - cy_arr[obj_ids]
@@ -158,7 +174,9 @@ def make_objects_list_for_index(
     map_index,
     max_objects_number=12,
 ):
-    """Generuje losowe rozłożenie przeszkód wewnątrz obszaru [-5, 5]^2."""
+    """Generuje losowe rozłożenie przeszkód wewnątrz obszaru [-5, 5]^2.
+    Przeszkody mogą być kołowe lub prostokątne.
+    """
     rng = np.random.RandomState(map_index)
     objects_number = int(math.ceil(max_objects_number * rng.rand()))
     objects_list = []
@@ -166,32 +184,86 @@ def make_objects_list_for_index(
     if map_index % 20 == 0:
         return objects_list
 
+    def object_distance(a, b):
+        type_a = a.get("type", "circle")
+        type_b = b.get("type", "circle")
+        cx_a, cy_a = float(a["c"][0]), float(a["c"][1])
+        cx_b, cy_b = float(b["c"][0]), float(b["c"][1])
+
+        if type_a in ("rect", "rectangle"):
+            hx_a, hy_a = float(a["size"][0]), float(a["size"][1])
+        else:
+            r_a = float(a["r"])
+
+        if type_b in ("rect", "rectangle"):
+            hx_b, hy_b = float(b["size"][0]), float(b["size"][1])
+        else:
+            r_b = float(b["r"])
+
+        if type_a not in ("rect", "rectangle") and type_b not in (
+            "rect",
+            "rectangle",
+        ):
+            return np.linalg.norm([cx_a - cx_b, cy_a - cy_b]) - (
+                r_a + r_b
+            )
+
+        if type_a in ("rect", "rectangle") and type_b in (
+            "rect",
+            "rectangle",
+        ):
+            dx = max(0.0, abs(cx_a - cx_b) - (hx_a + hx_b))
+            dy = max(0.0, abs(cy_a - cy_b) - (hy_a + hy_b))
+            return np.hypot(dx, dy)
+
+        if type_a in ("rect", "rectangle"):
+            dx = max(0.0, abs(cx_b - cx_a) - hx_a)
+            dy = max(0.0, abs(cy_b - cy_a) - hy_a)
+            return np.hypot(dx, dy) - r_b
+
+        dx = max(0.0, abs(cx_a - cx_b) - hx_b)
+        dy = max(0.0, abs(cy_a - cy_b) - hy_b)
+        return np.hypot(dx, dy) - r_a
+
     for _ in range(objects_number):
         attempts = 0
         max_attempts = 200
         valid = False
         while not valid and attempts < max_attempts:
             attempts += 1
-            # Pozycja losowa w zakresie [-4.3, 4.3] dla zachowania marginesu bezpieczeństwa
-            potential_c = rng.uniform(-4.3, 4.3, 2)
-            potential_r = rng.uniform(
-                0.3, 0.5
-            )  # Zrównoważony promień przeszkód
+            shape_type = "rect" if rng.rand() < 0.45 else "circle"
+
+            if shape_type == "rect":
+                half_w = rng.uniform(0.2, 0.55)
+                half_h = rng.uniform(0.2, 0.55)
+                min_xy = np.array([-4.3 + half_w, -4.3 + half_h])
+                max_xy = np.array([4.3 - half_w, 4.3 - half_h])
+                potential_c = rng.uniform(min_xy, max_xy)
+                potential_obj = {
+                    "type": "rect",
+                    "c": potential_c.copy(),
+                    "size": np.array([half_w, half_h], dtype=float),
+                }
+            else:
+                potential_r = rng.uniform(0.25, 0.5)
+                potential_c = rng.uniform(
+                    -4.3 + potential_r, 4.3 - potential_r, 2
+                )
+                potential_obj = {
+                    "type": "circle",
+                    "c": potential_c.copy(),
+                    "r": float(potential_r),
+                }
 
             overlap = False
             for obj in objects_list:
-                dist_centers = np.linalg.norm(
-                    potential_c - np.array(obj["c"])
-                )
-                if dist_centers < (potential_r + obj["r"] + 0.4):
+                if object_distance(potential_obj, obj) < 0.4:
                     overlap = True
                     break
 
             if not overlap:
                 valid = True
-                objects_list.append(
-                    {"c": potential_c.copy(), "r": float(potential_r)}
-                )
+                objects_list.append(potential_obj)
 
     return objects_list
 
@@ -210,7 +282,9 @@ def compute_map_result(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "file_name", nargs="?", default="nik_training_data_512x512_50.h5"
+        "file_name",
+        nargs="?",
+        default="nik_training_data_512x512_50.h5",
     )
     parser.add_argument(
         "generated_maps_number", nargs="?", type=int, default=50
@@ -249,14 +323,19 @@ def main():
             total=generated_maps_number,
             desc=f"Generating maps ({num_threads} threads)",
         ):
-
             index_string = f"{map_index:06d}"
             with h5py.File(file_name, "a") as f:
                 # Zapisujemy macierze o kształcie [1, H, W] zgodnym z architekturami splotowymi PyTorch
-                grid_data = np.expand_dims(grid, axis=0).astype(np.uint8)
+                grid_data = np.expand_dims(grid, axis=0).astype(
+                    np.uint8
+                )
                 h_data = np.expand_dims(h, axis=0).astype(np.float32)
-                u_x_data = np.expand_dims(u_x, axis=0).astype(np.float32)
-                u_y_data = np.expand_dims(u_y, axis=0).astype(np.float32)
+                u_x_data = np.expand_dims(u_x, axis=0).astype(
+                    np.float32
+                )
+                u_y_data = np.expand_dims(u_y, axis=0).astype(
+                    np.float32
+                )
                 dhdx_data = np.expand_dims(dhdx, axis=0).astype(
                     np.float32
                 )
