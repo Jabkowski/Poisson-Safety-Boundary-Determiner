@@ -1,6 +1,7 @@
 #include "poisson_solver.h"
 
 #include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -48,7 +49,8 @@ PoissonResult solvePoissonSafety(const SolverConfig &config)
             {
                 double dx_ = xv - c.cx;
                 double dy_ = yv - c.cy;
-                if (std::sqrt(dx_ * dx_ + dy_ * dy_) <= c.r)
+                double dist2 = dx_ * dx_ + dy_ * dy_;
+                if (dist2 <= c.r * c.r)
                 {
                     inAnyCircle = true;
                     break;
@@ -60,6 +62,7 @@ PoissonResult solvePoissonSafety(const SolverConfig &config)
     Eigen::MatrixXd ux_grid(config.nx, config.ny);
     Eigen::MatrixXd uy_grid(config.nx, config.ny);
     Eigen::MatrixXd fgrid(config.nx, config.ny);
+    double fval = std::sqrt(config.ux_val * config.ux_val + config.uy_val * config.uy_val);
     for (int i = 0; i < config.nx; ++i)
         for (int j = 0; j < config.ny; ++j)
         {
@@ -67,7 +70,7 @@ PoissonResult solvePoissonSafety(const SolverConfig &config)
             {
                 ux_grid(i, j) = config.ux_val;
                 uy_grid(i, j) = config.uy_val;
-                fgrid(i, j) = std::sqrt(config.ux_val * config.ux_val + config.uy_val * config.uy_val);
+                fgrid(i, j) = fval;
             }
             else
             {
@@ -94,6 +97,7 @@ PoissonResult solvePoissonSafety(const SolverConfig &config)
 
     std::vector<Eigen::Triplet<double>> trip;
     Eigen::VectorXd b = Eigen::VectorXd::Zero(count);
+    trip.reserve(static_cast<size_t>(count) * 5);
     for (int i = 1; i < config.nx - 1; ++i)
         for (int j = 1; j < config.ny - 1; ++j)
         {
@@ -125,9 +129,12 @@ PoissonResult solvePoissonSafety(const SolverConfig &config)
     {
         Eigen::SparseMatrix<double> A(count, count);
         A.setFromTriplets(trip.begin(), trip.end());
-        Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
-        solver.analyzePattern(A);
-        solver.factorize(A);
+        Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver;
+        solver.compute(A);
+        if (solver.info() != Eigen::Success)
+        {
+            throw std::runtime_error("SimplicialLLT decomposition failed");
+        }
         xsol = solver.solve(b);
     }
 
