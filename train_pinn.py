@@ -15,47 +15,6 @@ from models.unet import UNet, UNetBilinear
 torch.manual_seed(42)
 np.random.seed(42)
 
-
-# class DoublePoissonPINN(nn.Module):
-#     """
-#     PINN (MLP) zawierający DWIE osobne sieci neuronowe:
-#     1. u_net: wejście (x, y) -> wyjście (u_x, u_y) [Pole Laplace'a]
-#     2. h_net: wejście (x, y) -> wyjście (h)       [Funkcja bezpieczeństwa Poissona]
-#     Dzięki temu eliminujemy konflikt gradientów między dwoma różnymi równaniami fizycznymi.
-#     """
-
-#     def __init__(self):
-#         super(DoublePoissonPINN, self).__init__()
-
-#         # Sieć dla pola pomocniczego u (rozwiązuje układ Laplace'a)
-#         self.u_net = nn.Sequential(
-#             nn.Linear(2, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 2),  # Wyjścia: u_x, u_y
-#         )
-
-#         # Sieć dla funkcji bezpieczeństwa h (rozwiązuje równanie Poissona)
-#         self.h_net = nn.Sequential(
-#             nn.Linear(2, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 128),
-#             nn.Tanh(),
-#             nn.Linear(128, 1),  # Wyjście: h
-#         )
-
-#     def forward(self, x):
-#         """Zwraca spójny tensor 3-kanałowy [u_x, u_y, h] dla wstecznej kompatybilności"""
-#         u = self.u_net(x)
-#         h = self.h_net(x)
-#         return torch.cat([u, h], dim=1)
-
-
 class DoubleConv(nn.Module):
     """(splot2d => BatchNorm => ReLU) * 2"""
 
@@ -130,10 +89,11 @@ class UNetDoublePoisson(nn.Module):
 
     def __init__(self):
         super(UNetDoublePoisson, self).__init__()
-        # self.u_net = UNetBilinear(in_channels=1, out_channels=2)
-        # self.h_net = UNetBilinear(in_channels=2, out_channels=1)
-        self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
-        self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
+        self.u_net = UNetBilinear(in_channels=1, out_channels=2)
+        self.h_net = UNetBilinear(in_channels=2, out_channels=1)
+        # self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
+        # self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
+        # self.h_net = UNet(in_channels=2, out_channels=1)
 
     def forward(self, x):
         u = self.u_net(x)
@@ -244,17 +204,6 @@ def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
             cy = -5.0 + (row_c / (H - 1)) * 10.0
             centers[i] = (cx, cy)
 
-        # # Budowanie celu wektorowego na krawędziach
-        # rows, cols = np.where(boundary_np)
-        # for r, c in zip(rows, cols):
-        #     wx = -5.0 + (c / (W - 1)) * 10.0
-        #     wy = -5.0 + (r / (H - 1)) * 10.0
-        #     obs_id = labeled[r, c]
-        #     if obs_id in centers:
-        #         cx, cy = centers[obs_id]
-        #         U_targets[b, 0, r, c] = 1.0 * (wx - cx)  # u_x_target
-        #         U_targets[b, 1, r, c] = 1.0 * (wy - cy)  # u_y_target
-
     return U_targets, boundary_masks
 
 
@@ -321,54 +270,36 @@ def calc_poisson_pinn_loss(
     )
 
     # 1. Strata Równań Różniczkowych (PDE Residual Losses)
-    # Compute per-sample losses first (mean over spatial dims), then average across batch
-    # This makes the loss batch-size independent
-    loss_laplace_per_sample = torch.mean(lap_ux**2, dim=(1, 2, 3)) + torch.mean(lap_uy**2, dim=(1, 2, 3))
-    loss_laplace = loss_laplace_per_sample.mean()
-    
-    loss_poisson_per_sample = torch.mean((lap_h + norm_grad_u) ** 2, dim=(1, 2, 3))
-    loss_poisson = loss_poisson_per_sample.mean()
+    loss_laplace = torch.mean(lap_ux**2) + torch.mean(lap_uy**2)
+    loss_poisson = torch.mean((lap_h + norm_grad_u) ** 2)
     pde_loss = loss_laplace + loss_poisson
 
     # 2. Strata Warunków Brzegowych (BC Losses)
-    # Per-sample losses for interior occupancy boundary condition
-    loss_bc_h_per_sample = torch.mean((h * grid.float()) ** 2, dim=(1, 2, 3))
-    loss_bc_h = loss_bc_h_per_sample.mean()
-    
-    # Per-sample losses for outer boundary condition
-    loss_bc_h_outer_top = torch.mean(h[:, :, 0, :] ** 2, dim=(1, 2))
-    loss_bc_h_outer_bottom = torch.mean(h[:, :, -1, :] ** 2, dim=(1, 2))
-    loss_bc_h_outer_left = torch.mean(h[:, :, :, 0] ** 2, dim=(1, 2))
-    loss_bc_h_outer_right = torch.mean(h[:, :, :, -1] ** 2, dim=(1, 2))
-    loss_bc_h_outer = (loss_bc_h_outer_top + loss_bc_h_outer_bottom + loss_bc_h_outer_left + loss_bc_h_outer_right).mean()
+    loss_bc_h = torch.mean((h * grid.float()) ** 2)
+    loss_bc_h_outer = (
+        torch.mean(h[:, :, 0, :] ** 2)
+        + torch.mean(h[:, :, -1, :] ** 2)
+        + torch.mean(h[:, :, :, 0] ** 2)
+        + torch.mean(h[:, :, :, -1] ** 2)
+    )
 
     u_targets, boundary_masks = compute_batch_boundary_u_targets(
         grid, dx
     )
-    loss_bc_u_per_sample = torch.mean(
-        ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks, dim=(1, 2, 3)
+    loss_bc_u = torch.mean(
+        ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks
     )
-    loss_bc_u = loss_bc_u_per_sample.mean()
 
     bc_loss = loss_bc_h + loss_bc_h_outer + loss_bc_u
 
     # 3. Strata danych dla h i jego pochodnych
-    # Per-sample MSE losses for consistency with PDE/BC loss computation
-    loss_h_data_per_sample = torch.mean((h - h_true) ** 2, dim=(1, 2, 3))
-    loss_h_data = loss_h_data_per_sample.mean()
-    
-    loss_dhdx_data_per_sample = torch.mean((dh_dx - dhdx_true) ** 2, dim=(1, 2, 3))
-    loss_dhdx_data = loss_dhdx_data_per_sample.mean()
-    
-    loss_dhdy_data_per_sample = torch.mean((dh_dy - dhdy_true) ** 2, dim=(1, 2, 3))
-    loss_dhdy_data = loss_dhdy_data_per_sample.mean()
-    
-    loss_ux_data_per_sample = torch.mean((u_x - ux_true) ** 2, dim=(1, 2, 3))
-    loss_ux_data = loss_ux_data_per_sample.mean()
-    
-    loss_uy_data_per_sample = torch.mean((u_y - uy_true) ** 2, dim=(1, 2, 3))
-    loss_uy_data = loss_uy_data_per_sample.mean()
+    loss_h_data = F.mse_loss(h, h_true)
+    loss_dhdx_data = F.mse_loss(dh_dx, dhdx_true)
+    loss_dhdy_data = F.mse_loss(dh_dy, dhdy_true)
+    loss_ux_data = F.mse_loss(u_x, ux_true)
+    loss_uy_data = F.mse_loss(u_y, uy_true)
 
+    # Add after computing losses, before returning
     # Normalize PDE loss by dx² to make it resolution-independent
     pde_loss = pde_loss * (dx**2)  # Scale back the 1/dx² explosion
 
@@ -386,83 +317,6 @@ def calc_poisson_pinn_loss(
     )
 
     return pde_loss, value_data_loss, bc_loss, dux_dx, dux_dy
-
-
-# def calc_poisson_pinn_loss_old(
-#     pred_3ch, grid, dx=10.0 / 128.0, detach_u=True
-# ):
-#     """
-#     Oblicza fizyczny błąd PDE (Physics-Informed Loss) przy użyciu splotów 2D dla paczki (Batch).
-#     detach_u=True blokuje przepływ wsteczny gradientów h do podsieci pola pomocniczego u.
-#     """
-#     device = pred_3ch.device
-
-#     if detach_u:
-#         u_x = pred_3ch[:, 0:1, :, :].detach()
-#         u_y = pred_3ch[:, 1:2, :, :].detach()
-#     else:
-#         u_x = pred_3ch[:, 0:1, :, :]
-#         u_y = pred_3ch[:, 1:2, :, :]
-
-#     h = pred_3ch[:, 2:3, :, :]
-
-#     # Filtry Sobela do wyznaczania pierwszych pochodnych (gradientów)
-#     sobel_x = torch.tensor(
-#         [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
-#         dtype=torch.float32,
-#         device=device,
-#     ).view(1, 1, 3, 3) / (8.0 * dx)
-#     sobel_y = torch.tensor(
-#         [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
-#         dtype=torch.float32,
-#         device=device,
-#     ).view(1, 1, 3, 3) / (8.0 * dx)
-
-#     dux_dx = F.conv2d(u_x, sobel_x, padding=1)
-#     dux_dy = F.conv2d(u_x, sobel_y, padding=1)
-#     duy_dx = F.conv2d(u_y, sobel_x, padding=1)
-#     duy_dy = F.conv2d(u_y, sobel_y, padding=1)
-
-#     # Filtr Laplasjanu do obliczenia drugich pochodnych
-#     lap_kernel = torch.tensor(
-#         [[0, 1, 0], [1, -4, 1], [0, 1, 0]],
-#         dtype=torch.float32,
-#         device=device,
-#     ).view(1, 1, 3, 3) / (dx**2)
-#     lap_ux = F.conv2d(u_x, lap_kernel, padding=1)
-#     lap_uy = F.conv2d(u_y, lap_kernel, padding=1)
-#     lap_h = F.conv2d(h, lap_kernel, padding=1)
-
-#     # Norma gradientu pola pomocniczego u (źródło dla równania Poissona)
-#     norm_grad_u = torch.sqrt(
-#         dux_dx**2 + dux_dy**2 + duy_dx**2 + duy_dy**2 + 1e-8
-#     )
-
-#     # 1. Strata Równań Różniczkowych (PDE Residual Losses)
-#     loss_laplace = torch.mean(lap_ux**2) + torch.mean(lap_uy**2)
-#     loss_poisson = torch.mean((lap_h + norm_grad_u) ** 2)
-#     pde_loss = loss_laplace + loss_poisson
-
-#     # 2. Strata Warunków Brzegowych (BC Losses)
-#     loss_bc_h = torch.mean((h * grid.float()) ** 2)
-#     loss_bc_h_outer = (
-#         torch.mean(h[:, :, 0, :] ** 2)
-#         + torch.mean(h[:, :, -1, :] ** 2)
-#         + torch.mean(h[:, :, :, 0] ** 2)
-#         + torch.mean(h[:, :, :, -1] ** 2)
-#     )
-
-#     u_targets, boundary_masks = compute_batch_boundary_u_targets(
-#         grid, dx
-#     )
-#     loss_bc_u = torch.mean(
-#         ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks
-#     )
-
-#     bc_loss = loss_bc_h + loss_bc_h_outer + loss_bc_u
-
-#     return pde_loss, bc_loss, dux_dx, dux_dy
-
 
 def predict_safety_with_gradients(model, x, y):
     """Pozwala na odpytanie sieci h_net o wartość bezpieczeństwa i jej gradienty (model MLP)."""
@@ -707,8 +561,8 @@ def plot_poisson_prediction_example(
 
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
-    WEIGHTS_PATH = "weights/poisson_unet_double_subnet_model_512x512_e40_2000.pth"
+    H5_FILE_PATH = "data/nik_training_data_512x512_1000.h5"
+    WEIGHTS_PATH = "weights/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.pth"
     GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -748,11 +602,12 @@ if __name__ == "__main__":
     # 3. Inicjalizacja sieci splotowej UNetDoublePoisson i optymalizatora
     model = UNetDoublePoisson().to(device)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=5*1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 40
-    w_pde = 0.1
+    epochs = 30
+    w_pde = 0.01
     w_bc = 1
+    w_mse = 1
     dx = (
         10.0 / GRID_SIZE
     )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
@@ -812,9 +667,9 @@ if __name__ == "__main__":
                 detach_u=True,
             )
             # Całkowita hybrydowa strata (Dane + Fizyka)
-            loss = loss_data + w_pde * pde_loss + w_bc * bc_loss
+            loss = w_mse*loss_data + w_pde * pde_loss + w_bc * bc_loss
             if prev_epoch != epoch:
-                print(f"ld: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}")
+                print(f"lmse: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}, total: {loss}")
 
             loss.backward()
             optimizer.step()
@@ -863,33 +718,21 @@ if __name__ == "__main__":
                 val_pde_loss += pde_val.item()
                 val_bc_loss += bc_val.item()
                 
-                # plot_poisson_prediction_example(
-                # model,
-                # grid_val[0],
-                # grid_size=GRID_SIZE,
-                # device=device,
-                # h_true=h_val_true[0],
-                # ux_true=ux_val_true[0],
-                # uy_true=uy_val_true[0],
-                # save_path=f"fig/val_double_poisson_nikodemus_512x512_test_{val_idx}_{epoch + 1:02d}.png",
-                # show=False,
-                # )
-                # val_idx += 1
         print(
             f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f} | Walidacja (PDE): {val_pde_loss / len(val_loader):.6f} | Walidacja (BC): {val_bc_loss / len(val_loader):.6f}"
         )
         grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
-        plot_poisson_prediction_example(
-            model,
-            grid,
-            grid_size=GRID_SIZE,
-            device=device,
-            h_true=h_true,
-            ux_true=ux_true,
-            uy_true=uy_true,
-            save_path="fig/unet_double_poisson_nikodemus_512x512_2000_e50_batch_fix.png",
-            show=False,
-        )
+        # plot_poisson_prediction_example(
+        #     model,
+        #     grid,
+        #     grid_size=GRID_SIZE,
+        #     device=device,
+        #     h_true=h_true,
+        #     ux_true=ux_true,
+        #     uy_true=uy_true,
+        #     save_path="fig/poisson_unet_bilinear_model_512x512_1000_e20.png",
+        #     show=False,
+        # )
         
 
     # 4. Zapisanie wag modelu na dysku
@@ -908,6 +751,6 @@ if __name__ == "__main__":
         h_true=h_true,
         ux_true=ux_true,
         uy_true=uy_true,
-        save_path="fig/unet_double_poisson_nikodemus_512x512_e50_test_2000.png",
+        save_path="fig/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.png",
         show=False,
     )

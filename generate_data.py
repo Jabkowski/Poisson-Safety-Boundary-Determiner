@@ -210,10 +210,10 @@ def compute_map_result(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "file_name", nargs="?", default="nik_training_data_512x512_50.h5"
+        "file_name", nargs="?", default="nik_training_data_512x512_2000_10u.h5"
     )
     parser.add_argument(
-        "generated_maps_number", nargs="?", type=int, default=50
+        "generated_maps_number", nargs="?", type=int, default=2000
     )
     parser.add_argument(
         "resolution", nargs="?", type=int, default=512
@@ -221,11 +221,13 @@ def main():
     parser.add_argument(
         "--num-threads",
         type=int,
-        default=8,
+        default=16,
         help="Liczba wątków do równoległych obliczeń map (min 1)",
     )
     args = parser.parse_args()
 
+    u_magnifier = 1.0
+    
     file_name = args.file_name
     generated_maps_number = args.generated_maps_number
     res = args.resolution
@@ -255,8 +257,8 @@ def main():
                 # Zapisujemy macierze o kształcie [1, H, W] zgodnym z architekturami splotowymi PyTorch
                 grid_data = np.expand_dims(grid, axis=0).astype(np.uint8)
                 h_data = np.expand_dims(h, axis=0).astype(np.float32)
-                u_x_data = np.expand_dims(u_x, axis=0).astype(np.float32)
-                u_y_data = np.expand_dims(u_y, axis=0).astype(np.float32)
+                u_x_data = np.expand_dims(u_x, axis=0).astype(np.float32)*u_magnifier
+                u_y_data = np.expand_dims(u_y, axis=0).astype(np.float32)*u_magnifier
                 dhdx_data = np.expand_dims(dhdx, axis=0).astype(
                     np.float32
                 )

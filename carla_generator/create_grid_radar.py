@@ -7,15 +7,15 @@
 # top-down semantic segmentation camera (BEV) at 512x512.
 
 import argparse
+import math
 
 import h5py
-from utils import get_cityscapes_color
-from utils import CityObjectLabel
 import logging
 import random
 import os
 
 import carla
+from occupancy_grid_map import OccupancyGridMap
 
 try:
     import pygame
@@ -209,34 +209,72 @@ def spawn_ego_vehicle(world, blueprint):
     raise RuntimeError("Could not spawn ego vehicle in any spawn point.")
 
 
+# Radar BEV parameters
+RADAR_RANGE_M = 60.0   # metres shown in half-image height
+BEV_SIZE = 512         # pixels
+
+# (location_x, location_y, yaw_deg, display_color_rgb)
+_RADAR_CONFIGS = [
+    ( 2.0, -1.0,  -45.0, (255,  60,  60)),   # front-left
+    ( 2.0,  1.0,   45.0, ( 60,  60, 255)),   # front-right
+    (-2.0, -1.0, -135.0, (255, 165,   0)),   # rear-left
+    (-2.0,  1.0,  135.0, ( 60, 200,  60)),   # rear-right
+]
+
+
+def spawn_npc_vehicles(world, traffic_manager, count: int = 30):
+    """Spawn NPC vehicles managed by the Traffic Manager."""
+    blueprints = world.get_blueprint_library().filter("vehicle.*")
+    # Exclude bikes/motorbikes for cleaner radar returns
+    blueprints = [b for b in blueprints if int(b.get_attribute("number_of_wheels")) >= 4]
+
+    spawn_points = world.get_map().get_spawn_points()
+    random.shuffle(spawn_points)
+
+    npcs = []
+    for transform in spawn_points[:count]:
+        bp = random.choice(blueprints)
+        if bp.has_attribute("color"):
+            bp.set_attribute("color", random.choice(bp.get_attribute("color").recommended_values))
+        npc = world.try_spawn_actor(bp, transform)
+        if npc is not None:
+            npc.set_autopilot(True, traffic_manager.get_port())
+            npcs.append(npc)
+
+    logging.info("Spawned %d NPC vehicles", len(npcs))
+    return npcs
+
+
 def create_sensors(world, ego_vehicle):
     blueprint_library = world.get_blueprint_library()
 
-    # Front RGB camera (second sensor to satisfy multi-sensor requirement).
+    # Front RGB camera.
     rgb_bp = blueprint_library.find("sensor.camera.rgb")
     rgb_bp.set_attribute("image_size_x", "512")
     rgb_bp.set_attribute("image_size_y", "512")
     rgb_bp.set_attribute("fov", "90")
-
     rgb_transform = carla.Transform(
         carla.Location(x=1.5, z=2.2),
         carla.Rotation(pitch=-10),
     )
     rgb_camera = world.spawn_actor(rgb_bp, rgb_transform, attach_to=ego_vehicle)
 
-    # Top-down semantic segmentation camera (BEV), square 512x512.
-    sem_bp = blueprint_library.find("sensor.camera.semantic_segmentation")
-    sem_bp.set_attribute("image_size_x", "512")
-    sem_bp.set_attribute("image_size_y", "512")
-    sem_bp.set_attribute("fov", "140")
+    # 4 corner radars, 100° H-FOV each → overlapping 360° coverage.
+    radar_bp = blueprint_library.find("sensor.other.radar")
+    radar_bp.set_attribute("horizontal_fov", "100")
+    radar_bp.set_attribute("vertical_fov", "10")
+    radar_bp.set_attribute("range", str(RADAR_RANGE_M))
+    radar_bp.set_attribute("points_per_second", "1500")
 
-    sem_bev_transform = carla.Transform(
-        carla.Location(x=0.0, y=0.0, z=7.0),
-        carla.Rotation(pitch=-90.0),
-    )
-    sem_camera = world.spawn_actor(sem_bp, sem_bev_transform, attach_to=ego_vehicle)
+    radars = []
+    for lx, ly, yaw, _ in _RADAR_CONFIGS:
+        t = carla.Transform(
+            carla.Location(x=lx, y=ly, z=1.0),
+            carla.Rotation(yaw=yaw),
+        )
+        radars.append(world.spawn_actor(radar_bp, t, attach_to=ego_vehicle))
 
-    return rgb_camera, sem_camera
+    return rgb_camera, radars
 
 
 def draw_dashboard(display, font, real_fps, sim_fps, autopilot):
@@ -253,79 +291,64 @@ def draw_dashboard(display, font, real_fps, sim_fps, autopilot):
         y += 18
 
 
-def convert_to_occupancy_like(
-    image,
-):
-    """Convert carla.ColorConverter.CityScapesPalette image to a simplified occupancy-like format image where white is free space and black is occupied space."""
-    array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-    array = np.reshape(array, (image.height, image.width, 4))
-    rgb = array[:, :, :3][:, :, ::-1]
+def radar_to_bev(radar_datasets):
+    """Single-frame scatter-plot BEV, colour-coded per radar."""
+    bev = np.ones((BEV_SIZE, BEV_SIZE, 3), dtype=np.uint8) * 30
 
-    # Define a mapping from CityObjectLabel to occupancy-like values.
-    occupancy_map = {
-        CityObjectLabel.Buildings: 1,
-        CityObjectLabel.Fences: 2,
-        # CityObjectLabel.Other: 3,
-        CityObjectLabel.Pedestrians: 4,
-        CityObjectLabel.Poles: 5,
-        # CityObjectLabel.RoadLines: 6,
-        # CityObjectLabel.Roads: 7,
-        # CityObjectLabel.Sidewalks: 8,
-        CityObjectLabel.Vegetation: 9,
-        CityObjectLabel.Vehicles: 10,
-        CityObjectLabel.Walls: 11,
-        CityObjectLabel.TrafficSigns: 12,
-        CityObjectLabel.Sky: 13,
-        # CityObjectLabel.Ground: 14,
-        CityObjectLabel.Bridge: 15,
-        CityObjectLabel.RailTrack: 16,
-        CityObjectLabel.GuardRail: 17,
-        # CityObjectLabel.TrafficLight: 18,
-        CityObjectLabel.Static: 19,
-        # CityObjectLabel.Dynamic: 20,
-        CityObjectLabel.Water: 21,
-        CityObjectLabel.Terrain: 22,
-    }
-    # change color pixels which are occupancy into one same color (e.g. black) and non-occupancy color pixels into another color (e.g. white)
-    occupancy_image = np.ones((image.height, image.width), dtype=np.uint8) * 255
-    for label in occupancy_map:
-        occupancy_color = get_cityscapes_color(label)
-        occupancy_image[np.all(rgb == occupancy_color, axis=-1)] = 0
-    return occupancy_image
+    scale = (BEV_SIZE / 2.0) / RADAR_RANGE_M
+    cx = BEV_SIZE // 2
+    cy = BEV_SIZE // 2
+
+    for radar_data, yaw_deg, color in radar_datasets:
+        yaw_rad = np.radians(yaw_deg)
+        cos_y = np.cos(yaw_rad)
+        sin_y = np.sin(yaw_rad)
+
+        for detection in radar_data:
+            horiz = detection.depth * np.cos(detection.altitude)
+            x_local = horiz * np.cos(detection.azimuth)
+            y_local = horiz * np.sin(detection.azimuth)
+
+            fwd = x_local * cos_y - y_local * sin_y
+            lat = x_local * sin_y + y_local * cos_y
+
+            px = int(cx + lat * scale)
+            py = int(cy - fwd * scale)
+
+            if 0 <= px < BEV_SIZE and 0 <= py < BEV_SIZE:
+                bev[max(0, py - 2) : py + 2, max(0, px - 2) : px + 2] = color
+
+    bev[cy - 4 : cy + 4, cx - 4 : cx + 4] = (255, 255, 255)
+    return bev
 
 
-def save_occupancy_image_as_h5(occupancy_image, path):
+def save_radar_detections_as_h5(radar_datasets, path):
+    """Append combined 4-radar detections for one frame as an HDF5 dataset.
+
+    Each frame is stored as an Nx4 float32 array:
+    columns: [azimuth_rad, altitude_rad, depth_m, velocity_m_s]
     """
-    Append occupancy image as a new grid into an HDF5 file.
-        Expected occupancy 0 free 1 on, black is occupied need to be saved as 0, white is free needs to be saved as 1.
-    - Creates file if not exists
-    - Reuses existing 'grid' group
-    - Automatically assigns next key: '000001', '000002', ...
-    """
-
     os.makedirs(path, exist_ok=True)
-    h5_path = os.path.join(path, "grid.h5")
+    h5_path = os.path.join(path, "radar.h5")
 
-    # Convert to 0/1 uint8
-    grid = np.array(
-        [[1 if pixel == 0 else 0 for pixel in row] for row in occupancy_image],
-        dtype=np.uint8,
-    )
+    all_points = [
+        [d.azimuth, d.altitude, d.depth, d.velocity]
+        for radar_data, _, _ in radar_datasets
+        for d in radar_data
+    ]
+    points = np.array(all_points, dtype=np.float32).reshape(-1, 4)
 
     with h5py.File(h5_path, "a") as f:
-        # Ensure group exists
-        grid_group = f.require_group("grid")
+        radar_group = f.require_group("radar")
 
-        # Determine next index
-        if len(grid_group.keys()) == 0:
+        if len(radar_group.keys()) == 0:
             next_idx = 1
         else:
-            existing_indices = sorted(int(k) for k in grid_group.keys())
+            existing_indices = sorted(int(k) for k in radar_group.keys())
             next_idx = existing_indices[-1] + 1
 
-        key = f"{next_idx:06d}"  # e.g., '000001'
-
-        grid_group.create_dataset(key, data=grid)
+        key = f"{next_idx:06d}"
+        radar_group.create_dataset(key, data=points)
 
 
 def run(args):
@@ -339,7 +362,7 @@ def run(args):
 
     pygame.init()
     pygame.font.init()
-    display = pygame.display.set_mode((1024, 512), pygame.HWSURFACE | pygame.DOUBLEBUF)
+    display = pygame.display.set_mode((1536, 512), pygame.HWSURFACE | pygame.DOUBLEBUF)
     font = pygame.font.Font(pygame.font.get_default_font(), 16)
     clock = pygame.time.Clock()
 
@@ -367,12 +390,25 @@ def run(args):
 
         controller = KeyboardController(ego_vehicle)
 
-        rgb_camera, sem_camera = create_sensors(world, ego_vehicle)
-        actors.extend([rgb_camera, sem_camera])
+        npc_vehicles = spawn_npc_vehicles(world, traffic_manager, args.num_npcs)
+        actors.extend(npc_vehicles)
+
+        rgb_camera, radars = create_sensors(world, ego_vehicle)
+        actors.extend([rgb_camera] + radars)
+
+        ogm = OccupancyGridMap(
+            map_width_m=60.0,
+            map_height_m=60.0,
+            resolution=0.4,
+            decay_rate=6.0,
+            hit_increment=15.0,
+            max_confidence=100.0,
+            range_rate_threshold=0.15,
+        )
 
         traffic_manager.set_synchronous_mode(True)
         idx = 0
-        with CarlaSyncMode(world, rgb_camera, sem_camera, fps=10.0) as sync_mode:
+        with CarlaSyncMode(world, rgb_camera, *radars, fps=10.0) as sync_mode:
             while True:
                 # Keep simulation and wall-clock aligned at 10 Hz.
                 frame_ms = clock.tick_busy_loop(target_sync_fps)
@@ -382,16 +418,63 @@ def run(args):
 
                 controller.update_control(frame_ms)
 
-                snapshot, rgb_image, sem_image = sync_mode.tick(timeout=2.0)
+                tick_data = sync_mode.tick(timeout=2.0)
+                snapshot, rgb_image = tick_data[0], tick_data[1]
+                radar_measurements = tick_data[2:]  # one per corner radar
 
-                sem_image.convert(carla.ColorConverter.CityScapesPalette)
+                # Ego pose and velocity in world frame
+                ego_t = ego_vehicle.get_transform()
+                ego_x = ego_t.location.x
+                ego_y = ego_t.location.y
+                ego_yaw = math.radians(ego_t.rotation.yaw)
+                cos_e, sin_e = math.cos(ego_yaw), math.sin(ego_yaw)
+                ego_vel = ego_vehicle.get_velocity()
+
+                ogm.update_origin(ego_x, ego_y)
+
+                for meas, (lx, ly, yaw_deg, _) in zip(radar_measurements, _RADAR_CONFIGS):
+                    cos_r = math.cos(math.radians(yaw_deg))
+                    sin_r = math.sin(math.radians(yaw_deg))
+
+                    for det in meas:
+                        horiz = det.depth * math.cos(det.altitude)
+                        xl = horiz * math.cos(det.azimuth)
+                        yl = horiz * math.sin(det.azimuth)
+
+                        # radar-local → vehicle frame (include mount offset)
+                        xv = xl * cos_r - yl * sin_r + lx
+                        yv = xl * sin_r + yl * cos_r + ly
+
+                        # vehicle frame → world frame
+                        wx = ego_x + xv * cos_e - yv * sin_e
+                        wy = ego_y + xv * sin_e + yv * cos_e
+
+                        rr = OccupancyGridMap.compensate_range_rate(
+                            det.velocity, wx, wy,
+                            ego_x, ego_y, ego_vel.x, ego_vel.y,
+                        )
+                        ogm.add_hit(wx, wy, rr)
+
+                ogm.apply_decay(dt=frame_ms / 200.0)
+
                 rgb_image.convert(carla.ColorConverter.Raw)
-                sem_image = convert_to_occupancy_like(sem_image)
-                rgb_surface = image_to_surface(rgb_image)
-                sem_surface = image_to_surface(sem_image)
+                bev_image = ogm.get_ego_centric_bev(
+                    ego_x, ego_y, ego_yaw, RADAR_RANGE_M, (BEV_SIZE, BEV_SIZE)
+                )
 
-                display.blit(rgb_surface, (0, 0))
-                display.blit(sem_surface, (512, 0))
+                radar_datasets = [
+                    (meas, cfg[2], cfg[3])
+                    for meas, cfg in zip(radar_measurements, _RADAR_CONFIGS)
+                ]
+                scatter_image = radar_to_bev(radar_datasets)
+
+                rgb_surface     = image_to_surface(rgb_image)
+                bev_surface     = image_to_surface(bev_image)
+                scatter_surface = image_to_surface(scatter_image)
+
+                display.blit(rgb_surface,     (0,    0))
+                display.blit(bev_surface,     (512,  0))
+                display.blit(scatter_surface, (1024, 0))
 
                 real_fps = clock.get_fps()
                 sim_fps = (
@@ -403,8 +486,9 @@ def run(args):
                     display, font, real_fps, sim_fps, controller.autopilot_enabled
                 )
                 if controller.record_grid:
-                    save_occupancy_image_as_h5(
-                        sem_image,
+                    save_radar_detections_as_h5(
+                        [(meas, yaw, color) for meas, (_, _, yaw, color) in
+                         zip(radar_measurements, _RADAR_CONFIGS)],
                         "/home/xk2qmc/CARLA/CARLA_0.9.16/semantic_grid_generator/grids",
                     )
                 idx += 1
@@ -445,6 +529,12 @@ def main():
         default=8000,
         type=int,
         help="Traffic Manager port (default: 8000)",
+    )
+    argparser.add_argument(
+        "--num-npcs",
+        default=30,
+        type=int,
+        help="Number of NPC vehicles to spawn (default: 30)",
     )
     argparser.add_argument(
         "--filter",
