@@ -42,6 +42,14 @@ def build_arg_parser():
     parser.add_argument("--data-path", default=DEFAULT_DATA_PATH)
     parser.add_argument("--weights-path", default=DEFAULT_WEIGHTS_PATH)
     parser.add_argument(
+        "--norm-stats-path",
+        default=None,
+        help=(
+            "Path to normalization stats .pt file. "
+            "If omitted, tries <weights_path with _norm_stats.pt suffix>."
+        ),
+    )
+    parser.add_argument(
         "--sample-index",
         type=int,
         default=None,
@@ -61,7 +69,7 @@ def main():
 
     import torch
 
-    from train_pinn import UNetDoublePoisson
+    from train_pinn import UNetDoublePoisson, denormalize_pred_3ch
 
     device = torch.device(
         "cpu" if args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,6 +85,25 @@ def main():
     model.eval()
     total_parameters = sum(parameter.numel() for parameter in model.parameters())
     print(f"Model parameters: {total_parameters}")
+
+    if args.norm_stats_path is not None:
+        norm_stats_path = args.norm_stats_path
+    else:
+        if args.weights_path.endswith(".pth"):
+            norm_stats_path = args.weights_path.replace(".pth", "_norm_stats.pt")
+        else:
+            norm_stats_path = f"{args.weights_path}_norm_stats.pt"
+
+    normalization_stats = None
+    if os.path.isfile(norm_stats_path):
+        norm_payload = torch.load(norm_stats_path, map_location="cpu")
+        normalization_stats = norm_payload.get("stats")
+        print(f"Loaded normalization stats from: {norm_stats_path}")
+    else:
+        print(
+            "Normalization stats not found; plotting raw model outputs. "
+            f"Expected stats file: {norm_stats_path}"
+        )
 
     grids = load_grids_for_inference(args.data_path)
 
@@ -101,7 +128,15 @@ def main():
             pred_3ch = model(input_grid)
             if device.type == "cuda":
                 torch.cuda.synchronize()
-            print(f"pred: {time.perf_counter() - prediction_start}")
+            elapsed = time.perf_counter() - prediction_start
+            prediction_seconds += elapsed
+            print(f"pred: {elapsed}")
+
+            if normalization_stats is not None:
+                pred_3ch = denormalize_pred_3ch(
+                    pred_3ch, normalization_stats
+                )
+
             pred_3ch = pred_3ch.cpu().numpy().squeeze(0)
             ux_pred = pred_3ch[0]
             uy_pred = pred_3ch[1]
