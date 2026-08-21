@@ -275,6 +275,23 @@ def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
     return U_targets, boundary_masks
 
 
+def compute_boundary_mask(grid_batch):
+    """
+    Zwraca maskę krawędzi przeszkód [B, 1, H, W] używaną do warunku brzegowego dla u.
+    """
+    boundary_masks = torch.zeros_like(grid_batch, dtype=torch.float32)
+    for b in range(grid_batch.shape[0]):
+        eroded = -F.max_pool2d(
+            -grid_batch[b : b + 1].float(),
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+        boundary_tensor = grid_batch[b : b + 1].float() - eroded
+        boundary_masks[b : b + 1] = boundary_tensor
+    return boundary_masks
+
+
 def calc_poisson_pinn_loss(
     pred_3ch,
     h_true,
@@ -351,9 +368,8 @@ def calc_poisson_pinn_loss(
         + torch.mean(h[:, :, :, -1] ** 2)
     )
 
-    u_targets, boundary_masks = compute_batch_boundary_u_targets(
-        grid, dx
-    )
+    boundary_masks = compute_boundary_mask(grid)
+    u_targets = torch.cat([ux_true, uy_true], dim=1)
     loss_bc_u = torch.mean(
         ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks
     )
@@ -649,7 +665,7 @@ def plot_poisson_prediction_example(
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
     H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
-    WEIGHTS_PATH = "weights/poisson_unet_bilinear_model_512x512_2000_e30_normalization_test.pth"
+    WEIGHTS_PATH = "weights/pde_1_0_poisson_unet_bilinear_model_512x512_2000_e40_normalization_bc_fix_test.pth"
     BEST_WEIGHTS_PATH = WEIGHTS_PATH.replace(".pth", "_best.pth")
     NORM_STATS_PATH = WEIGHTS_PATH.replace(".pth", "_norm_stats.pt")
     GRID_SIZE = 512.0
@@ -713,8 +729,8 @@ if __name__ == "__main__":
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 30
-    w_pde = 0.1
+    epochs = 40
+    w_pde = 1.0
     w_bc = 1
     w_mse = 1
     early_stopping_patience = 12
@@ -929,6 +945,6 @@ if __name__ == "__main__":
         h_true=h_true,
         ux_true=ux_true,
         uy_true=uy_true,
-        save_path="fig/poisson_unet_bilinear_model_512x512_2000_e30_normalization_test.png",
+        save_path="fig/pde_1_0_poisson_unet_bilinear_model_512x512_2000_e40_normalization_bc_fix_test.png",
         show=False,
     )

@@ -1,0 +1,240 @@
+Używane urządzenie: cuda
+Ładowanie zestawu danych z pliku: data/nik_training_data_512x512_2000.h5...
+
+Wczytywanie map:   0%|          | 0/2000 [00:00<?, ?it/s]
+Wczytywanie map:   1%|          | 23/2000 [00:00<00:08, 228.26it/s]
+Wczytywanie map:   2%|▏         | 48/2000 [00:00<00:08, 239.21it/s]
+Wczytywanie map:   4%|▍         | 75/2000 [00:00<00:07, 250.07it/s]
+Wczytywanie map:   5%|▌         | 102/2000 [00:00<00:07, 256.53it/s]
+Wczytywanie map:   6%|▋         | 129/2000 [00:00<00:07, 258.43it/s]
+Wczytywanie map:   8%|▊         | 156/2000 [00:00<00:07, 259.80it/s]
+Wczytywanie map:   9%|▉         | 183/2000 [00:00<00:06, 261.59it/s]
+Wczytywanie map:  10%|█         | 210/2000 [00:00<00:06, 262.80it/s]
+Wczytywanie map:  12%|█▏        | 237/2000 [00:00<00:06, 262.94it/s]
+Wczytywanie map:  13%|█▎        | 264/2000 [00:01<00:06, 263.49it/s]
+Wczytywanie map:  15%|█▍        | 291/2000 [00:01<00:06, 251.27it/s]
+Wczytywanie map:  16%|█▌        | 318/2000 [00:01<00:06, 256.21it/s]
+Wczytywanie map:  17%|█▋        | 345/2000 [00:01<00:06, 258.49it/s]
+Wczytywanie map:  19%|█▊        | 372/2000 [00:01<00:06, 259.66it/s]
+Wczytywanie map:  20%|█▉        | 399/2000 [00:01<00:06, 258.58it/s]
+Wczytywanie map:  21%|██▏       | 425/2000 [00:01<00:06, 258.75it/s]
+Wczytywanie map:  23%|██▎       | 452/2000 [00:01<00:05, 260.72it/s]
+Wczytywanie map:  24%|██▍       | 479/2000 [00:01<00:05, 253.74it/s]
+Wczytywanie map:  25%|██▌       | 505/2000 [00:01<00:05, 255.49it/s]
+Wczytywanie map:  27%|██▋       | 532/2000 [00:02<00:05, 257.46it/s]
+Wczytywanie map:  28%|██▊       | 559/2000 [00:02<00:05, 259.63it/s]
+Wczytywanie map:  29%|██▉       | 585/2000 [00:02<00:05, 259.40it/s]
+Wczytywanie map:  31%|███       | 611/2000 [00:02<00:05, 258.59it/s]
+Wczytywanie map:  32%|███▏      | 637/2000 [00:02<00:05, 257.95it/s]
+Wczytywanie map:  33%|███▎      | 663/2000 [00:02<00:05, 257.36it/s]
+Wczytywanie map:  34%|███▍      | 689/2000 [00:02<00:05, 257.45it/s]
+Wczytywanie map:  36%|███▌      | 715/2000 [00:02<00:04, 257.08it/s]
+Wczytywanie map:  37%|███▋      | 742/2000 [00:02<00:04, 258.19it/s]
+Wczytywanie map:  38%|███▊      | 768/2000 [00:02<00:04, 258.67it/s]
+Wczytywanie map:  40%|███▉      | 794/2000 [00:03<00:04, 257.18it/s]
+Wczytywanie map:  41%|████      | 821/2000 [00:03<00:04, 258.62it/s]
+Wczytywanie map:  42%|████▏     | 847/2000 [00:03<00:04, 258.42it/s]
+Wczytywanie map:  44%|████▎     | 873/2000 [00:03<00:04, 245.23it/s]
+Wczytywanie map:  45%|████▍     | 898/2000 [00:03<00:05, 217.65it/s]
+Wczytywanie map:  46%|████▌     | 921/2000 [00:03<00:05, 206.21it/s]
+Wczytywanie map:  47%|████▋     | 943/2000 [00:03<00:05, 196.40it/s]
+Wczytywanie map:  48%|████▊     | 964/2000 [00:03<00:05, 173.92it/s]
+Wczytywanie map:  49%|████▉     | 982/2000 [00:04<00:06, 164.19it/s]
+Wczytywanie map:  50%|████▉     | 999/2000 [00:04<00:06, 156.06it/s]
+Wczytywanie map:  51%|█████     | 1015/2000 [00:04<00:06, 148.42it/s]
+Wczytywanie map:  52%|█████▏    | 1030/2000 [00:04<00:06, 146.41it/s]
+Wczytywanie map:  52%|█████▏    | 1045/2000 [00:04<00:06, 144.76it/s]
+Wczytywanie map:  53%|█████▎    | 1060/2000 [00:04<00:06, 142.04it/s]
+Wczytywanie map:  54%|█████▍    | 1075/2000 [00:04<00:06, 141.58it/s]
+Wczytywanie map:  55%|█████▍    | 1090/2000 [00:04<00:06, 141.74it/s]
+Wczytywanie map:  55%|█████▌    | 1105/2000 [00:04<00:06, 139.88it/s]
+Wczytywanie map:  56%|█████▌    | 1119/2000 [00:05<00:06, 139.81it/s]
+Wczytywanie map:  57%|█████▋    | 1133/2000 [00:05<00:06, 137.40it/s]
+Wczytywanie map:  57%|█████▋    | 1147/2000 [00:05<00:06, 136.33it/s]
+Wczytywanie map:  58%|█████▊    | 1161/2000 [00:05<00:06, 134.50it/s]
+Wczytywanie map:  59%|█████▉    | 1175/2000 [00:05<00:06, 134.74it/s]
+Wczytywanie map:  59%|█████▉    | 1189/2000 [00:05<00:06, 134.33it/s]
+Wczytywanie map:  60%|██████    | 1208/2000 [00:05<00:05, 149.27it/s]
+Wczytywanie map:  62%|██████▏   | 1231/2000 [00:05<00:04, 172.27it/s]
+Wczytywanie map:  62%|██████▏   | 1249/2000 [00:05<00:04, 173.58it/s]
+Wczytywanie map:  64%|██████▎   | 1270/2000 [00:06<00:03, 182.66it/s]
+Wczytywanie map:  64%|██████▍   | 1289/2000 [00:06<00:03, 181.89it/s]
+Wczytywanie map:  65%|██████▌   | 1308/2000 [00:06<00:04, 168.06it/s]
+Wczytywanie map:  66%|██████▋   | 1327/2000 [00:06<00:03, 171.89it/s]
+Wczytywanie map:  67%|██████▋   | 1345/2000 [00:06<00:03, 171.04it/s]
+Wczytywanie map:  68%|██████▊   | 1363/2000 [00:06<00:03, 162.18it/s]
+Wczytywanie map:  69%|██████▉   | 1380/2000 [00:06<00:03, 159.73it/s]
+Wczytywanie map:  70%|██████▉   | 1397/2000 [00:06<00:03, 155.50it/s]
+Wczytywanie map:  71%|███████   | 1413/2000 [00:06<00:03, 151.52it/s]
+Wczytywanie map:  71%|███████▏  | 1429/2000 [00:07<00:03, 150.11it/s]
+Wczytywanie map:  72%|███████▏  | 1449/2000 [00:07<00:03, 162.85it/s]
+Wczytywanie map:  74%|███████▎  | 1470/2000 [00:07<00:03, 175.93it/s]
+Wczytywanie map:  75%|███████▍  | 1491/2000 [00:07<00:02, 184.62it/s]
+Wczytywanie map:  76%|███████▌  | 1510/2000 [00:07<00:02, 184.18it/s]
+Wczytywanie map:  77%|███████▋  | 1531/2000 [00:07<00:02, 190.97it/s]
+Wczytywanie map:  78%|███████▊  | 1551/2000 [00:07<00:02, 190.75it/s]
+Wczytywanie map:  79%|███████▊  | 1572/2000 [00:07<00:02, 195.70it/s]
+Wczytywanie map:  80%|███████▉  | 1596/2000 [00:07<00:01, 206.68it/s]
+Wczytywanie map:  81%|████████  | 1620/2000 [00:07<00:01, 216.39it/s]
+Wczytywanie map:  82%|████████▏ | 1645/2000 [00:08<00:01, 224.96it/s]
+Wczytywanie map:  84%|████████▎ | 1671/2000 [00:08<00:01, 234.39it/s]
+Wczytywanie map:  85%|████████▍ | 1697/2000 [00:08<00:01, 241.84it/s]
+Wczytywanie map:  86%|████████▌ | 1723/2000 [00:08<00:01, 246.73it/s]
+Wczytywanie map:  88%|████████▊ | 1750/2000 [00:08<00:00, 250.77it/s]
+Wczytywanie map:  89%|████████▉ | 1776/2000 [00:08<00:00, 252.48it/s]
+Wczytywanie map:  90%|█████████ | 1802/2000 [00:08<00:00, 254.20it/s]
+Wczytywanie map:  91%|█████████▏| 1828/2000 [00:08<00:00, 255.00it/s]
+Wczytywanie map:  93%|█████████▎| 1854/2000 [00:08<00:00, 254.58it/s]
+Wczytywanie map:  94%|█████████▍| 1880/2000 [00:08<00:00, 255.57it/s]
+Wczytywanie map:  95%|█████████▌| 1907/2000 [00:09<00:00, 258.57it/s]
+Wczytywanie map:  97%|█████████▋| 1934/2000 [00:09<00:00, 259.64it/s]
+Wczytywanie map:  98%|█████████▊| 1961/2000 [00:09<00:00, 261.35it/s]
+Wczytywanie map:  99%|█████████▉| 1988/2000 [00:09<00:00, 260.58it/s]
+Wczytywanie map: 100%|██████████| 2000/2000 [00:09<00:00, 211.92it/s]
+Zapisano statystyki normalizacji do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_norm_stats.pt
+Zestaw treningowy: 1600 map | Zestaw walidacyjny: 400 map
+
+Rozpoczynanie treningu splotowej sieci UNetDoublePoisson na wszystkich mapach...
+
+-> Epoka 01 | Średni Loss Treningowy: 0.898832 | Walidacja (MSE_h): 0.141166 | Walidacja (MSE_ux): 0.054915 | Walidacja (MSE_uy): 0.072980 | Walidacja (DATA): 0.269060 | Walidacja (PDE): 0.278441 | Walidacja (BC): 0.039098 | Walidacja (TOTAL): 0.447379
+Nowe najlepsze wagi (epoka 01) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.301190048456192, pde: 0.15782958269119263, bc: 0.056566182523965836, total: 0.5155858397483826
+-> Epoka 02 | Średni Loss Treningowy: 0.346357 | Walidacja (MSE_h): 0.103901 | Walidacja (MSE_ux): 0.048030 | Walidacja (MSE_uy): 0.048169 | Walidacja (DATA): 0.200100 | Walidacja (PDE): 0.152035 | Walidacja (BC): 0.039009 | Walidacja (TOTAL): 0.315126
+Nowe najlepsze wagi (epoka 02) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.18967993557453156, pde: 0.06369528919458389, bc: 0.02220771089196205, total: 0.2755829393863678
+-> Epoka 03 | Średni Loss Treningowy: 0.317559 | Walidacja (MSE_h): 0.123363 | Walidacja (MSE_ux): 0.042786 | Walidacja (MSE_uy): 0.041542 | Walidacja (DATA): 0.207691 | Walidacja (PDE): 0.096759 | Walidacja (BC): 0.038968 | Walidacja (TOTAL): 0.295038
+Nowe najlepsze wagi (epoka 03) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.22994185984134674, pde: 0.04542403668165207, bc: 0.027871567755937576, total: 0.3032374680042267
+-> Epoka 04 | Średni Loss Treningowy: 0.244438 | Walidacja (MSE_h): 0.162985 | Walidacja (MSE_ux): 0.052921 | Walidacja (MSE_uy): 0.045283 | Walidacja (DATA): 0.261189 | Walidacja (PDE): 0.088573 | Walidacja (BC): 0.039426 | Walidacja (TOTAL): 0.344902
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.20064906775951385, pde: 0.037579964846372604, bc: 0.030312566086649895, total: 0.2685416042804718
+-> Epoka 05 | Średni Loss Treningowy: 0.250675 | Walidacja (MSE_h): 0.086916 | Walidacja (MSE_ux): 0.040403 | Walidacja (MSE_uy): 0.036620 | Walidacja (DATA): 0.163939 | Walidacja (PDE): 0.077238 | Walidacja (BC): 0.039021 | Walidacja (TOTAL): 0.241579
+Nowe najlepsze wagi (epoka 05) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.11895626783370972, pde: 0.059414613991975784, bc: 0.0807134360074997, total: 0.2590843141078949
+-> Epoka 06 | Średni Loss Treningowy: 0.217405 | Walidacja (MSE_h): 0.075165 | Walidacja (MSE_ux): 0.038265 | Walidacja (MSE_uy): 0.039493 | Walidacja (DATA): 0.152922 | Walidacja (PDE): 0.069238 | Walidacja (BC): 0.038468 | Walidacja (TOTAL): 0.226009
+Nowe najlepsze wagi (epoka 06) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.12835437059402466, pde: 0.04911736026406288, bc: 0.06288325041532516, total: 0.240354984998703
+-> Epoka 07 | Średni Loss Treningowy: 0.202983 | Walidacja (MSE_h): 0.100659 | Walidacja (MSE_ux): 0.043268 | Walidacja (MSE_uy): 0.087759 | Walidacja (DATA): 0.231686 | Walidacja (PDE): 0.066482 | Walidacja (BC): 0.039027 | Walidacja (TOTAL): 0.303954
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.20043402910232544, pde: 0.02762303315103054, bc: 0.025091182440519333, total: 0.25314822793006897
+-> Epoka 08 | Średni Loss Treningowy: 0.188370 | Walidacja (MSE_h): 0.103439 | Walidacja (MSE_ux): 0.036766 | Walidacja (MSE_uy): 0.035205 | Walidacja (DATA): 0.175410 | Walidacja (PDE): 0.060302 | Walidacja (BC): 0.039336 | Walidacja (TOTAL): 0.244896
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.07950964570045471, pde: 0.050050038844347, bc: 0.07648924738168716, total: 0.20604893565177917
+-> Epoka 09 | Średni Loss Treningowy: 0.192331 | Walidacja (MSE_h): 0.091789 | Walidacja (MSE_ux): 0.034156 | Walidacja (MSE_uy): 0.032060 | Walidacja (DATA): 0.158006 | Walidacja (PDE): 0.061730 | Walidacja (BC): 0.038487 | Walidacja (TOTAL): 0.227358
+Brak poprawy przez 3 epok (patience=12)
+
+lmse: 0.08732037991285324, pde: 0.040123648941516876, bc: 0.0534353107213974, total: 0.18087933957576752
+-> Epoka 10 | Średni Loss Treningowy: 0.200605 | Walidacja (MSE_h): 0.085300 | Walidacja (MSE_ux): 0.033972 | Walidacja (MSE_uy): 0.036338 | Walidacja (DATA): 0.155611 | Walidacja (PDE): 0.057631 | Walidacja (BC): 0.038701 | Walidacja (TOTAL): 0.223127
+Nowe najlepsze wagi (epoka 10) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.11444775760173798, pde: 0.03783820569515228, bc: 0.05100326985120773, total: 0.2032892405986786
+-> Epoka 11 | Średni Loss Treningowy: 0.181583 | Walidacja (MSE_h): 0.104250 | Walidacja (MSE_ux): 0.040743 | Walidacja (MSE_uy): 0.037515 | Walidacja (DATA): 0.182508 | Walidacja (PDE): 0.056393 | Walidacja (BC): 0.039152 | Walidacja (TOTAL): 0.249857
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.06444266438484192, pde: 0.03379307687282562, bc: 0.04568738117814064, total: 0.14392311871051788
+-> Epoka 12 | Średni Loss Treningowy: 0.171687 | Walidacja (MSE_h): 0.068465 | Walidacja (MSE_ux): 0.032158 | Walidacja (MSE_uy): 0.031885 | Walidacja (DATA): 0.132507 | Walidacja (PDE): 0.059836 | Walidacja (BC): 0.038855 | Walidacja (TOTAL): 0.201280
+Nowe najlepsze wagi (epoka 12) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.12260982394218445, pde: 0.04340590536594391, bc: 0.056455206125974655, total: 0.2224709391593933
+-> Epoka 13 | Średni Loss Treningowy: 0.164234 | Walidacja (MSE_h): 0.089972 | Walidacja (MSE_ux): 0.034638 | Walidacja (MSE_uy): 0.042083 | Walidacja (DATA): 0.166693 | Walidacja (PDE): 0.055650 | Walidacja (BC): 0.039016 | Walidacja (TOTAL): 0.233534
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.06621167808771133, pde: 0.04355335980653763, bc: 0.07141823321580887, total: 0.18118327856063843
+-> Epoka 14 | Średni Loss Treningowy: 0.159502 | Walidacja (MSE_h): 0.078495 | Walidacja (MSE_ux): 0.030892 | Walidacja (MSE_uy): 0.030873 | Walidacja (DATA): 0.140260 | Walidacja (PDE): 0.056568 | Walidacja (BC): 0.038666 | Walidacja (TOTAL): 0.207210
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.07104039192199707, pde: 0.016626834869384766, bc: 0.009779554791748524, total: 0.09744678437709808
+-> Epoka 15 | Średni Loss Treningowy: 0.156004 | Walidacja (MSE_h): 0.075979 | Walidacja (MSE_ux): 0.036814 | Walidacja (MSE_uy): 0.030936 | Walidacja (DATA): 0.143730 | Walidacja (PDE): 0.055143 | Walidacja (BC): 0.038976 | Walidacja (TOTAL): 0.210277
+Brak poprawy przez 3 epok (patience=12)
+
+lmse: 0.07291735708713531, pde: 0.020958295091986656, bc: 0.02013828605413437, total: 0.11401394009590149
+-> Epoka 16 | Średni Loss Treningowy: 0.157719 | Walidacja (MSE_h): 0.070439 | Walidacja (MSE_ux): 0.029293 | Walidacja (MSE_uy): 0.029371 | Walidacja (DATA): 0.129103 | Walidacja (PDE): 0.061856 | Walidacja (BC): 0.038789 | Walidacja (TOTAL): 0.198820
+Nowe najlepsze wagi (epoka 16) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.035184308886528015, pde: 0.023332901298999786, bc: 0.021989936009049416, total: 0.08050714433193207
+-> Epoka 17 | Średni Loss Treningowy: 0.148641 | Walidacja (MSE_h): 0.069881 | Walidacja (MSE_ux): 0.031606 | Walidacja (MSE_uy): 0.037105 | Walidacja (DATA): 0.138592 | Walidacja (PDE): 0.066648 | Walidacja (BC): 0.039105 | Walidacja (TOTAL): 0.211021
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.06195719540119171, pde: 0.027991706505417824, bc: 0.025354232639074326, total: 0.11530312895774841
+-> Epoka 18 | Średni Loss Treningowy: 0.150024 | Walidacja (MSE_h): 0.087910 | Walidacja (MSE_ux): 0.044753 | Walidacja (MSE_uy): 0.036330 | Walidacja (DATA): 0.168993 | Walidacja (PDE): 0.065074 | Walidacja (BC): 0.038085 | Walidacja (TOTAL): 0.239615
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.0816902369260788, pde: 0.03018363192677498, bc: 0.03472863510251045, total: 0.14660249650478363
+-> Epoka 19 | Średni Loss Treningowy: 0.147679 | Walidacja (MSE_h): 0.071727 | Walidacja (MSE_ux): 0.026602 | Walidacja (MSE_uy): 0.028944 | Walidacja (DATA): 0.127273 | Walidacja (PDE): 0.061910 | Walidacja (BC): 0.038539 | Walidacja (TOTAL): 0.196767
+Nowe najlepsze wagi (epoka 19) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.06607775390148163, pde: 0.037503812462091446, bc: 0.04452315345406532, total: 0.1481047123670578
+-> Epoka 20 | Średni Loss Treningowy: 0.143351 | Walidacja (MSE_h): 0.096862 | Walidacja (MSE_ux): 0.030123 | Walidacja (MSE_uy): 0.030566 | Walidacja (DATA): 0.157551 | Walidacja (PDE): 0.059032 | Walidacja (BC): 0.038888 | Walidacja (TOTAL): 0.225955
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.05307450145483017, pde: 0.026208892464637756, bc: 0.0318082831799984, total: 0.11109167337417603
+-> Epoka 21 | Średni Loss Treningowy: 0.139255 | Walidacja (MSE_h): 0.083759 | Walidacja (MSE_ux): 0.025893 | Walidacja (MSE_uy): 0.026574 | Walidacja (DATA): 0.136227 | Walidacja (PDE): 0.061155 | Walidacja (BC): 0.038612 | Walidacja (TOTAL): 0.205416
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.06891515851020813, pde: 0.030963905155658722, bc: 0.03682372346520424, total: 0.1367027908563614
+-> Epoka 22 | Średni Loss Treningowy: 0.147010 | Walidacja (MSE_h): 0.065267 | Walidacja (MSE_ux): 0.025817 | Walidacja (MSE_uy): 0.028335 | Walidacja (DATA): 0.119419 | Walidacja (PDE): 0.062802 | Walidacja (BC): 0.038597 | Walidacja (TOTAL): 0.189417
+Nowe najlepsze wagi (epoka 22) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.05723561719059944, pde: 0.032076794654130936, bc: 0.03519728407263756, total: 0.12450969219207764
+-> Epoka 23 | Średni Loss Treningowy: 0.138521 | Walidacja (MSE_h): 0.065730 | Walidacja (MSE_ux): 0.026519 | Walidacja (MSE_uy): 0.029475 | Walidacja (DATA): 0.121724 | Walidacja (PDE): 0.067292 | Walidacja (BC): 0.038856 | Walidacja (TOTAL): 0.194226
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.06183572858572006, pde: 0.041915785521268845, bc: 0.050573330372571945, total: 0.15432484447956085
+-> Epoka 24 | Średni Loss Treningowy: 0.137929 | Walidacja (MSE_h): 0.124822 | Walidacja (MSE_ux): 0.031984 | Walidacja (MSE_uy): 0.040554 | Walidacja (DATA): 0.197361 | Walidacja (PDE): 0.059398 | Walidacja (BC): 0.039102 | Walidacja (TOTAL): 0.266162
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.08150720596313477, pde: 0.026738660410046577, bc: 0.020790839567780495, total: 0.12903670966625214
+-> Epoka 25 | Średni Loss Treningowy: 0.133786 | Walidacja (MSE_h): 0.080741 | Walidacja (MSE_ux): 0.027015 | Walidacja (MSE_uy): 0.026985 | Walidacja (DATA): 0.134742 | Walidacja (PDE): 0.060630 | Walidacja (BC): 0.038566 | Walidacja (TOTAL): 0.203623
+Brak poprawy przez 3 epok (patience=12)
+
+lmse: 0.044143352657556534, pde: 0.028415681794285774, bc: 0.03276478871703148, total: 0.10532382130622864
+-> Epoka 26 | Średni Loss Treningowy: 0.134769 | Walidacja (MSE_h): 0.057379 | Walidacja (MSE_ux): 0.026506 | Walidacja (MSE_uy): 0.026325 | Walidacja (DATA): 0.110210 | Walidacja (PDE): 0.066489 | Walidacja (BC): 0.038502 | Walidacja (TOTAL): 0.181957
+Nowe najlepsze wagi (epoka 26) zapisane do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth
+
+lmse: 0.04251619055867195, pde: 0.03161787614226341, bc: 0.03787223994731903, total: 0.1120063066482544
+-> Epoka 27 | Średni Loss Treningowy: 0.131697 | Walidacja (MSE_h): 0.179890 | Walidacja (MSE_ux): 0.045363 | Walidacja (MSE_uy): 0.051493 | Walidacja (DATA): 0.276746 | Walidacja (PDE): 0.055739 | Walidacja (BC): 0.039018 | Walidacja (TOTAL): 0.343633
+Brak poprawy przez 1 epok (patience=12)
+
+lmse: 0.043757371604442596, pde: 0.025141606107354164, bc: 0.02998102828860283, total: 0.09888000786304474
+-> Epoka 28 | Średni Loss Treningowy: 0.131411 | Walidacja (MSE_h): 0.079876 | Walidacja (MSE_ux): 0.029357 | Walidacja (MSE_uy): 0.026689 | Walidacja (DATA): 0.135923 | Walidacja (PDE): 0.065396 | Walidacja (BC): 0.038622 | Walidacja (TOTAL): 0.207244
+Brak poprawy przez 2 epok (patience=12)
+
+lmse: 0.05279145389795303, pde: 0.03744550049304962, bc: 0.04634326323866844, total: 0.1365802139043808
+-> Epoka 29 | Średni Loss Treningowy: 0.131014 | Walidacja (MSE_h): 0.099684 | Walidacja (MSE_ux): 0.028092 | Walidacja (MSE_uy): 0.031622 | Walidacja (DATA): 0.159398 | Walidacja (PDE): 0.060415 | Walidacja (BC): 0.038973 | Walidacja (TOTAL): 0.228579
+Brak poprawy przez 3 epok (patience=12)
+
+lmse: 0.0767388641834259, pde: 0.027038203552365303, bc: 0.02605382539331913, total: 0.12983089685440063
+-> Epoka 30 | Średni Loss Treningowy: 0.130009 | Walidacja (MSE_h): 0.086582 | Walidacja (MSE_ux): 0.029933 | Walidacja (MSE_uy): 0.029423 | Walidacja (DATA): 0.145939 | Walidacja (PDE): 0.063827 | Walidacja (BC): 0.038773 | Walidacja (TOTAL): 0.216625
+Brak poprawy przez 4 epok (patience=12)
+
+lmse: 0.04338802024722099, pde: 0.0319032184779644, bc: 0.03248251974582672, total: 0.10777375847101212
+-> Epoka 31 | Średni Loss Treningowy: 0.129646 | Walidacja (MSE_h): 0.091017 | Walidacja (MSE_ux): 0.027165 | Walidacja (MSE_uy): 0.031804 | Walidacja (DATA): 0.149985 | Walidacja (PDE): 0.065003 | Walidacja (BC): 0.038970 | Walidacja (TOTAL): 0.221457
+Brak poprawy przez 5 epok (patience=12)
+
+lmse: 0.03948621451854706, pde: 0.04131370037794113, bc: 0.043380655348300934, total: 0.12418057024478912
+-> Epoka 32 | Średni Loss Treningowy: 0.130107 | Walidacja (MSE_h): 0.102672 | Walidacja (MSE_ux): 0.028359 | Walidacja (MSE_uy): 0.031949 | Walidacja (DATA): 0.162980 | Walidacja (PDE): 0.058766 | Walidacja (BC): 0.038842 | Walidacja (TOTAL): 0.231205
+Brak poprawy przez 6 epok (patience=12)
+
+lmse: 0.060386404395103455, pde: 0.04144090414047241, bc: 0.05327096953988075, total: 0.15509827435016632
+-> Epoka 33 | Średni Loss Treningowy: 0.127864 | Walidacja (MSE_h): 0.078861 | Walidacja (MSE_ux): 0.032986 | Walidacja (MSE_uy): 0.034041 | Walidacja (DATA): 0.145888 | Walidacja (PDE): 0.064409 | Walidacja (BC): 0.039216 | Walidacja (TOTAL): 0.217308
+Brak poprawy przez 7 epok (patience=12)
+
+lmse: 0.054189544171094894, pde: 0.0285384189337492, bc: 0.02143605425953865, total: 0.1041640192270279
+-> Epoka 34 | Średni Loss Treningowy: 0.126372 | Walidacja (MSE_h): 0.082653 | Walidacja (MSE_ux): 0.024590 | Walidacja (MSE_uy): 0.028456 | Walidacja (DATA): 0.135698 | Walidacja (PDE): 0.063911 | Walidacja (BC): 0.038650 | Walidacja (TOTAL): 0.206304
+Brak poprawy przez 8 epok (patience=12)
+
+lmse: 0.07371488213539124, pde: 0.017217395827174187, bc: 0.009346980601549149, total: 0.10027925670146942
+-> Epoka 35 | Średni Loss Treningowy: 0.125383 | Walidacja (MSE_h): 0.075948 | Walidacja (MSE_ux): 0.028787 | Walidacja (MSE_uy): 0.033575 | Walidacja (DATA): 0.138310 | Walidacja (PDE): 0.062309 | Walidacja (BC): 0.039076 | Walidacja (TOTAL): 0.208541
+Brak poprawy przez 9 epok (patience=12)
+
+Pomyślnie zapisano wagi modelu do weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test.pth
+
+Generowanie wykresu końcowego dla wybranej mapy...
