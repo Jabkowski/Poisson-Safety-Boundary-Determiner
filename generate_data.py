@@ -17,6 +17,7 @@ import h5py
 from tqdm import tqdm
 from scipy import sparse
 from scipy.sparse.linalg import splu
+import numpy as np
 
 
 def solve_laplace_and_poisson(
@@ -118,8 +119,18 @@ def solve_laplace_and_poisson(
             [centers[i][1] for i in range(len(objects_list))]
         )
         obj_ids = obstacle_id_map[mask]
-        val_ux_full[mask] = X[mask] - cx_arr[obj_ids]
-        val_uy_full[mask] = Y[mask] - cy_arr[obj_ids]
+        ux = X[mask] - cx_arr[obj_ids]
+        uy = Y[mask] - cy_arr[obj_ids]
+
+        vecs = np.column_stack([ux, uy])
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        safe_norms = np.where(norms == 0.0, 1.0, norms)
+
+        ux_norm = ux / safe_norms[:, 0]
+        uy_norm = uy / safe_norms[:, 0]
+
+        val_ux_full[mask] = ux_norm
+        val_uy_full[mask] = uy_norm
 
     # Rozwiązujemy niezależnie dla składowych u_x oraz u_y (ten sam wkład warunków brzegowych)
     rhs_ux = -(A_bc @ val_ux_full.reshape(-1)[known_flat])
