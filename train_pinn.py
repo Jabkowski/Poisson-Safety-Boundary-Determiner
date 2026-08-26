@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 import os
+import copy
 from scipy.ndimage import binary_erosion, label, center_of_mass
 from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
@@ -114,6 +115,7 @@ class H5PoissonDataset(Dataset):
         self.dhdy_values = []
         self.ux_values = []
         self.uy_values = []
+        self.normalization_stats = None
 
         if not os.path.exists(file_path):
             raise FileNotFoundError(
@@ -147,18 +149,84 @@ class H5PoissonDataset(Dataset):
                 self.ux_values.append(ux_data)
                 self.uy_values.append(uy_data)
 
+    def set_normalization_stats(self, normalization_stats):
+        self.normalization_stats = normalization_stats
+
+    def _normalize_field(self, field_name, tensor):
+        if self.normalization_stats is None:
+            return tensor
+        if field_name not in self.normalization_stats:
+            return tensor
+        mean = self.normalization_stats[field_name]["mean"]
+        std = self.normalization_stats[field_name]["std"]
+        return (tensor - mean) / std
+
     def __len__(self):
         return len(self.grids)
 
     def __getitem__(self, idx):
         return (
             self.grids[idx],
-            self.h_values[idx],
-            self.dhdx_values[idx],
-            self.dhdy_values[idx],
-            self.ux_values[idx],
-            self.uy_values[idx],
+            self._normalize_field("h", self.h_values[idx]),
+            self._normalize_field("dhdx", self.dhdx_values[idx]),
+            self._normalize_field("dhdy", self.dhdy_values[idx]),
+            self._normalize_field("ux", self.ux_values[idx]),
+            self._normalize_field("uy", self.uy_values[idx]),
         )
+
+
+def compute_normalization_stats(dataset, train_indices, eps=1e-8):
+    """
+    Wylicza statystyki normalizacji wyłącznie na podzbiorze treningowym.
+    Statystyki mają postać: {field: {mean: float, std: float}}.
+    """
+    field_mapping = {
+        "h": "h_values",
+        "dhdx": "dhdx_values",
+        "dhdy": "dhdy_values",
+        "ux": "ux_values",
+        "uy": "uy_values",
+    }
+
+    stats = {}
+    for field_name, attr_name in field_mapping.items():
+        values = getattr(dataset, attr_name)
+        total_sum = 0.0
+        total_sum_sq = 0.0
+        total_count = 0
+
+        for idx in train_indices:
+            tensor = values[idx].to(dtype=torch.float64)
+            total_sum += tensor.sum().item()
+            total_sum_sq += (tensor * tensor).sum().item()
+            total_count += tensor.numel()
+
+        mean = total_sum / max(total_count, 1)
+        variance = max(total_sum_sq / max(total_count, 1) - mean * mean, 0.0)
+        std = float(np.sqrt(variance) + eps)
+
+        stats[field_name] = {"mean": float(mean), "std": std}
+
+    return stats
+
+
+def denormalize_pred_3ch(pred_3ch, normalization_stats):
+    """
+    Konwertuje wyjście modelu [ux_norm, uy_norm, h_norm] do skali fizycznej.
+    """
+    pred_phys = pred_3ch.clone()
+
+    ux_mean = normalization_stats["ux"]["mean"]
+    ux_std = normalization_stats["ux"]["std"]
+    uy_mean = normalization_stats["uy"]["mean"]
+    uy_std = normalization_stats["uy"]["std"]
+    h_mean = normalization_stats["h"]["mean"]
+    h_std = normalization_stats["h"]["std"]
+
+    pred_phys[:, 0:1, :, :] = pred_phys[:, 0:1, :, :] * ux_std + ux_mean
+    pred_phys[:, 1:2, :, :] = pred_phys[:, 1:2, :, :] * uy_std + uy_mean
+    pred_phys[:, 2:3, :, :] = pred_phys[:, 2:3, :, :] * h_std + h_mean
+    return pred_phys
 
 
 def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
@@ -205,6 +273,23 @@ def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
             centers[i] = (cx, cy)
 
     return U_targets, boundary_masks
+
+
+def compute_boundary_mask(grid_batch):
+    """
+    Zwraca maskę krawędzi przeszkód [B, 1, H, W] używaną do warunku brzegowego dla u.
+    """
+    boundary_masks = torch.zeros_like(grid_batch, dtype=torch.float32)
+    for b in range(grid_batch.shape[0]):
+        eroded = -F.max_pool2d(
+            -grid_batch[b : b + 1].float(),
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+        boundary_tensor = grid_batch[b : b + 1].float() - eroded
+        boundary_masks[b : b + 1] = boundary_tensor
+    return boundary_masks
 
 
 def calc_poisson_pinn_loss(
@@ -283,9 +368,8 @@ def calc_poisson_pinn_loss(
         + torch.mean(h[:, :, :, -1] ** 2)
     )
 
-    u_targets, boundary_masks = compute_batch_boundary_u_targets(
-        grid, dx
-    )
+    boundary_masks = compute_boundary_mask(grid)
+    u_targets = torch.cat([ux_true, uy_true], dim=1)
     loss_bc_u = torch.mean(
         ((pred_3ch[:, 0:2] - u_targets) ** 2) * boundary_masks
     )
@@ -339,6 +423,7 @@ def plot_poisson_prediction_example(
     grid,
     grid_size,
     device=None,
+    normalization_stats=None,
     h_true=None,
     ux_true=None,
     uy_true=None,
@@ -358,6 +443,15 @@ def plot_poisson_prediction_example(
             array = np.asarray(value)
         return np.squeeze(array)
 
+    def _maybe_denorm_2d(array_2d, field_name):
+        if array_2d is None or normalization_stats is None:
+            return array_2d
+        if field_name not in normalization_stats:
+            return array_2d
+        mean = normalization_stats[field_name]["mean"]
+        std = normalization_stats[field_name]["std"]
+        return array_2d * std + mean
+
     grid_np = _to_numpy_2d(grid)
     if grid_np.ndim == 3:
         grid_np = np.squeeze(grid_np, axis=0)
@@ -376,7 +470,12 @@ def plot_poisson_prediction_example(
 
     model.eval()
     with torch.no_grad():
-        preds_3ch = model(grid_tensor).cpu().numpy().squeeze(0)
+        preds_3ch = model(grid_tensor)
+        if normalization_stats is not None:
+            preds_3ch = denormalize_pred_3ch(
+                preds_3ch, normalization_stats
+            )
+        preds_3ch = preds_3ch.cpu().numpy().squeeze(0)
 
     u_x_pred = preds_3ch[0]
     u_y_pred = preds_3ch[1]
@@ -402,6 +501,10 @@ def plot_poisson_prediction_example(
         h_true_np = _to_numpy_2d(h_true)
         ux_true_np = _to_numpy_2d(ux_true)
         uy_true_np = _to_numpy_2d(uy_true)
+
+        h_true_np = _maybe_denorm_2d(h_true_np, "h")
+        ux_true_np = _maybe_denorm_2d(ux_true_np, "ux")
+        uy_true_np = _maybe_denorm_2d(uy_true_np, "uy")
 
         ux_true_np = np.where(mask, ux_true_np, np.nan)
         uy_true_np = np.where(mask, uy_true_np, np.nan)
@@ -561,8 +664,10 @@ def plot_poisson_prediction_example(
 
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "data/nik_training_data_512x512_1000.h5"
-    WEIGHTS_PATH = "weights/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.pth"
+    H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
+    WEIGHTS_PATH = "weights/pde_1_0_poisson_unet_bilinear_model_512x512_2000_e40_normalization_bc_fix_test.pth"
+    BEST_WEIGHTS_PATH = WEIGHTS_PATH.replace(".pth", "_best.pth")
+    NORM_STATS_PATH = WEIGHTS_PATH.replace(".pth", "_norm_stats.pt")
     GRID_SIZE = 512.0
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -586,6 +691,26 @@ if __name__ == "__main__":
         full_dataset, [train_size, val_size]
     )
 
+    # Statystyki normalizacji wyliczamy wyłącznie na zbiorze treningowym.
+    train_indices = train_dataset.indices
+    normalization_stats = compute_normalization_stats(
+        full_dataset, train_indices
+    )
+    full_dataset.set_normalization_stats(normalization_stats)
+
+    os.makedirs(os.path.dirname(NORM_STATS_PATH) or ".", exist_ok=True)
+    torch.save(
+        {
+            "stats": normalization_stats,
+            "data_path": H5_FILE_PATH,
+            "grid_size": GRID_SIZE,
+            "train_size": len(train_dataset),
+            "val_size": len(val_dataset),
+        },
+        NORM_STATS_PATH,
+    )
+    print(f"Zapisano statystyki normalizacji do {NORM_STATS_PATH}")
+
     # Batch size ustawiony na 2 ze względu na wysokie zapotrzebowanie RAM/VRAM przy wymiarach GRID_SIZExGRID_SIZE
     batch_size = 2
     train_loader = DataLoader(
@@ -604,10 +729,15 @@ if __name__ == "__main__":
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 30
-    w_pde = 0.01
+    epochs = 40
+    w_pde = 1.0
     w_bc = 1
     w_mse = 1
+    early_stopping_patience = 12
+    early_stopping_min_delta = 1e-6
+    best_val_total = float("inf")
+    best_epoch = -1
+    epochs_no_improve = 0
     dx = (
         10.0 / GRID_SIZE
     )  # fizyczny krok siatki dla szerokości 10 [-5.0, 5.0]
@@ -655,8 +785,9 @@ if __name__ == "__main__":
             loss_data = loss_data_h + loss_data_ux + loss_data_uy
 
             # Strata fizyczna PDE wyznaczana splotowo na GPU
+            pred_phys = denormalize_pred_3ch(pred_3ch, normalization_stats)
             pde_loss, _, bc_loss, _, _ = calc_poisson_pinn_loss(
-                pred_3ch,
+                pred_phys,
                 h_true,
                 dhdx_true,
                 dhdy_true,
@@ -680,9 +811,13 @@ if __name__ == "__main__":
 
         # --- Walidacja po każdej epoce ---
         model.eval()
-        val_loss = 0.0
+        val_mse_h = 0.0
+        val_mse_ux = 0.0
+        val_mse_uy = 0.0
+        val_data_loss = 0.0
         val_pde_loss = 0.0
         val_bc_loss = 0.0
+        val_total_loss = 0.0
         val_idx=0
         with torch.no_grad():
             for (
@@ -702,10 +837,21 @@ if __name__ == "__main__":
 
                 pred_val = model(grid_val)
                 h_val_pred = pred_val[:, 2:3, :, :]
-                val_loss += criterion(h_val_pred, h_val_true).item()
+                val_h = criterion(h_val_pred, h_val_true)
+                val_ux = criterion(pred_val[:, 0:1, :, :], ux_val_true)
+                val_uy = criterion(pred_val[:, 1:2, :, :], uy_val_true)
+                val_data = val_h + val_ux + val_uy
 
+                val_mse_h += val_h.item()
+                val_mse_ux += val_ux.item()
+                val_mse_uy += val_uy.item()
+                val_data_loss += val_data.item()
+
+                pred_val_phys = denormalize_pred_3ch(
+                    pred_val, normalization_stats
+                )
                 pde_val, _, bc_val, _, _ = calc_poisson_pinn_loss(
-                    pred_val,
+                    pred_val_phys,
                     h_val_true,
                     dhdx_val_true,
                     dhdy_val_true,
@@ -715,12 +861,53 @@ if __name__ == "__main__":
                     dx=dx,
                     detach_u=True,
                 )
-                val_pde_loss += pde_val.item()
-                val_bc_loss += bc_val.item()
+                val_pde_item = pde_val.item()
+                val_bc_item = bc_val.item()
+                val_total_item = (
+                    w_mse * val_data.item()
+                    + w_pde * val_pde_item
+                    + w_bc * val_bc_item
+                )
+
+                val_pde_loss += val_pde_item
+                val_bc_loss += val_bc_item
+                val_total_loss += val_total_item
                 
+        val_mse_h_avg = val_mse_h / len(val_loader)
+        val_mse_ux_avg = val_mse_ux / len(val_loader)
+        val_mse_uy_avg = val_mse_uy / len(val_loader)
+        val_data_avg = val_data_loss / len(val_loader)
+        val_pde_avg = val_pde_loss / len(val_loader)
+        val_bc_avg = val_bc_loss / len(val_loader)
+        val_total_avg = val_total_loss / len(val_loader)
+
         print(
-            f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | Walidacja (MSE): {val_loss / len(val_loader):.6f} | Walidacja (PDE): {val_pde_loss / len(val_loader):.6f} | Walidacja (BC): {val_bc_loss / len(val_loader):.6f}"
+            f"-> Epoka {epoch + 1:02d} | Średni Loss Treningowy: {running_loss / len(train_loader):.6f} | "
+            f"Walidacja (MSE_h): {val_mse_h_avg:.6f} | Walidacja (MSE_ux): {val_mse_ux_avg:.6f} | "
+            f"Walidacja (MSE_uy): {val_mse_uy_avg:.6f} | Walidacja (DATA): {val_data_avg:.6f} | "
+            f"Walidacja (PDE): {val_pde_avg:.6f} | Walidacja (BC): {val_bc_avg:.6f} | "
+            f"Walidacja (TOTAL): {val_total_avg:.6f}"
         )
+
+        if val_total_avg < best_val_total - early_stopping_min_delta:
+            best_val_total = val_total_avg
+            best_epoch = epoch + 1
+            epochs_no_improve = 0
+            torch.save(model.state_dict(), BEST_WEIGHTS_PATH)
+            print(
+                f"Nowe najlepsze wagi (epoka {best_epoch:02d}) zapisane do {BEST_WEIGHTS_PATH}"
+            )
+        else:
+            epochs_no_improve += 1
+            print(
+                f"Brak poprawy przez {epochs_no_improve} epok (patience={early_stopping_patience})"
+            )
+            if epochs_no_improve >= early_stopping_patience:
+                print(
+                    f"Wczesne zatrzymanie: brak poprawy Walidacja (TOTAL). Najlepsza epoka: {best_epoch:02d}"
+                )
+                break
+
         grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
         # plot_poisson_prediction_example(
         #     model,
@@ -735,12 +922,18 @@ if __name__ == "__main__":
         # )
         
 
-    # 4. Zapisanie wag modelu na dysku
+    # 4. Załadowanie najlepszych wag i zapis końcowy
+    if os.path.isfile(BEST_WEIGHTS_PATH):
+        model.load_state_dict(
+            torch.load(BEST_WEIGHTS_PATH, map_location=device)
+        )
+
+    # 5. Zapisanie wag modelu na dysku
     os.makedirs(os.path.dirname(WEIGHTS_PATH) or ".", exist_ok=True)
     torch.save(model.state_dict(), WEIGHTS_PATH)
     print(f"\nPomyślnie zapisano wagi modelu do {WEIGHTS_PATH}")
 
-    # --- 5. WIZUALIZACJA WYNIKÓW DLA PIERWSZEJ MAPY TESTOWEJ ---
+    # --- 6. WIZUALIZACJA WYNIKÓW DLA PIERWSZEJ MAPY TESTOWEJ ---
     print("\nGenerowanie wykresu końcowego dla wybranej mapy...")
     grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
     plot_poisson_prediction_example(
@@ -748,9 +941,10 @@ if __name__ == "__main__":
         grid,
         grid_size=GRID_SIZE,
         device=device,
+        normalization_stats=normalization_stats,
         h_true=h_true,
         ux_true=ux_true,
         uy_true=uy_true,
-        save_path="fig/poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1.png",
+        save_path="fig/pde_1_0_poisson_unet_bilinear_model_512x512_2000_e40_normalization_bc_fix_test.png",
         show=False,
     )

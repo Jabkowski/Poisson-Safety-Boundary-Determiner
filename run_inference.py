@@ -4,11 +4,14 @@ import time
 
 from py_utils.utils import plot_poisson_pinn_example
 
-DEFAULT_DATA_PATH = "data/Carla/carla_10_08_examples_grid.h5"
+DEFAULT_DATA_PATH = "data/nik_training_data_512x512_10.h5"
 DEFAULT_WEIGHTS_PATH = (
-    "weights/poisson_unet_bilinear_model_512x512_2000_e35_ok_inf.pth"
+    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth"
     #poisson_unet_bilinear_model_512x512_2000_e35_ok_inf
     #poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1
+)
+DEFAULT_NORM_STATS_PATH = (
+    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_norm_stats.pt"
 )
 DEFAULT_EXTENT = (-5.0, 5.0, -5.0, 5.0)
 
@@ -42,6 +45,11 @@ def build_arg_parser():
     parser.add_argument("--data-path", default=DEFAULT_DATA_PATH)
     parser.add_argument("--weights-path", default=DEFAULT_WEIGHTS_PATH)
     parser.add_argument(
+        "--norm-stats-path",
+        default=DEFAULT_NORM_STATS_PATH,
+        help="Path to normalization stats .pt file.",
+    )
+    parser.add_argument(
         "--sample-index",
         type=int,
         default=None,
@@ -61,7 +69,7 @@ def main():
 
     import torch
 
-    from train_pinn import UNetDoublePoisson
+    from train_pinn import UNetDoublePoisson, denormalize_pred_3ch
 
     device = torch.device(
         "cpu" if args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,6 +85,18 @@ def main():
     model.eval()
     total_parameters = sum(parameter.numel() for parameter in model.parameters())
     print(f"Model parameters: {total_parameters}")
+
+    norm_stats_path = args.norm_stats_path
+    assert os.path.isfile(
+        norm_stats_path
+    ), f"Normalization stats file not found: {norm_stats_path}"
+
+    norm_payload = torch.load(norm_stats_path, map_location="cpu")
+    normalization_stats = norm_payload.get("stats")
+    assert (
+        normalization_stats is not None
+    ), f"Normalization stats file does not contain 'stats': {norm_stats_path}"
+    print(f"Loaded normalization stats from: {norm_stats_path}")
 
     grids = load_grids_for_inference(args.data_path)
 
@@ -101,7 +121,15 @@ def main():
             pred_3ch = model(input_grid)
             if device.type == "cuda":
                 torch.cuda.synchronize()
-            print(f"pred: {time.perf_counter() - prediction_start}")
+            elapsed = time.perf_counter() - prediction_start
+            prediction_seconds += elapsed
+            print(f"pred: {elapsed}")
+
+            if normalization_stats is not None:
+                pred_3ch = denormalize_pred_3ch(
+                    pred_3ch, normalization_stats
+                )
+
             pred_3ch = pred_3ch.cpu().numpy().squeeze(0)
             ux_pred = pred_3ch[0]
             uy_pred = pred_3ch[1]
@@ -110,7 +138,7 @@ def main():
 
             save_path = os.path.join(
                 "fig",
-                f"carla_10_08_grid_{base_name}_sample_{sample_index:06d}_prediction.png",
+                f"nik_10_pred_release_1_weights_{base_name}_sample_{sample_index:06d}_prediction.png",
             )
 
             print(f"Plotting prediction for sample {sample_index} from {args.data_path}")
