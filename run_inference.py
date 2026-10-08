@@ -69,7 +69,7 @@ def main():
 
     import torch
 
-    from train_pinn import UNetDoublePoisson, denormalize_pred_3ch
+    from models.double_unet import UNetDoublePoisson, denormalize_pred_3ch
 
     device = torch.device(
         "cpu" if args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")

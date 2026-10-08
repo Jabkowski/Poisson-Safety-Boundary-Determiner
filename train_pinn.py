@@ -15,6 +15,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from data.h5_poisson_dataset import H5PoissonDataset
 
 from models.double_unet import UNetDoublePoisson
+from models.double_unet import denormalize_pred_3ch
 
 # Ustawienie ziarna losowości dla powtarzalności wyników
 torch.manual_seed(42)
@@ -56,29 +57,6 @@ def compute_normalization_stats(dataset, train_indices, eps=1e-8):
         stats[field_name] = {"mean": float(mean), "std": std}
 
     return stats
-
-
-def denormalize_pred_3ch(pred_3ch, normalization_stats):
-    """
-    Konwertuje wyjście modelu [ux_norm, uy_norm, h_norm] do skali fizycznej.
-    """
-    pred_phys = pred_3ch.clone()
-
-    ux_mean = normalization_stats["ux"]["mean"]
-    ux_std = normalization_stats["ux"]["std"]
-    uy_mean = normalization_stats["uy"]["mean"]
-    uy_std = normalization_stats["uy"]["std"]
-    h_mean = normalization_stats["h"]["mean"]
-    h_std = normalization_stats["h"]["std"]
-
-    pred_phys[:, 0:1, :, :] = (
-        pred_phys[:, 0:1, :, :] * ux_std + ux_mean
-    )
-    pred_phys[:, 1:2, :, :] = (
-        pred_phys[:, 1:2, :, :] * uy_std + uy_mean
-    )
-    pred_phys[:, 2:3, :, :] = pred_phys[:, 2:3, :, :] * h_std + h_mean
-    return pred_phys
 
 
 def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
