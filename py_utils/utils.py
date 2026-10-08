@@ -19,6 +19,22 @@ def _to_2d(value):
     return array
 
 
+def plot_input_grid(grid):
+    """Plot the input grid from the H5 file."""
+    import matplotlib.pyplot as plt
+
+    grid_2d = _to_2d(grid)
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(grid_2d, cmap="gray_r", origin="lower")
+    plt.title("Input Grid")
+    plt.colorbar(label="Occupancy")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.axis("equal")
+    plt.savefig("input_grid.png", dpi=300)
+    plt.close()
+
 def plot_poisson_pinn_example(
     grid,
     h,

@@ -1,68 +1,85 @@
-# Poisson-Safety-Boundary-Determiner
+# Poisson Safety Boundary Determiner
 
-Poisson Safety Boundary Determiner - ml based supervised model
+Tools for generating Poisson safety-function datasets and training or running
+neural-network models on occupancy grids.
 
-![Example](fig/occupancy.svg)
+![Example occupancy grid](fig/occupancy.svg)
 
-## Artificial Data Generation
+## Features
 
-Directory *matlab* contains scripts which:
+- Generate obstacle maps and reference fields with a Python finite-difference
+  solver.
+- Train a `UNetDoublePoisson` model.
+- Run inference on HDF5 occupancy-grid datasets.
+- Explore the separate C++ solver described in [`cpp/README.md`](cpp/README.md).
 
-- generates set of maps with randomly located circular obstacles (obstacles
-can be separated or occluded),
-- generates based on them Poisson Safety Function with derivatives over *x*
-and *y*,
-- saves results to **.h5* file.
+## Setup
 
-This scripts can be run directly in malab or there can be used Docker file for
-run it with MCR (MATLAB Compiler Runtime) - with compiled version of script, so
-no MATLAB license is needed.
+Install the Python dependencies:
 
-### Docker
-
-To run generation with MCR you can use docker with follwing commands:
-
-#### Build
-
-```console
-docker build -t mcr_data_generation .
+```bash
+pip install -r requirements.txt
 ```
 
-#### Run
+The pinned dependencies include CUDA-related packages. If installation fails
+on your platform, install a PyTorch build appropriate for your system and
+adjust the dependency list as needed.
 
-Run with 2 arguments:
+## Generate training data
 
-- output file name,
-- number of grids generated.
+The Python generator creates obstacle maps and reference fields on a square
+grid. For example, generate 500 maps at 512 × 512 resolution using four threads:
 
-```console
-docker run --rm mcr_data_generation output_file_name.h5 1000
+```bash
+python generate_data.py data/training_data_512x512_500.h5 500 512 --num-threads 4
 ```
 
-### RUN inside docker
+The HDF5 file contains the groups `grid`, `u_x`, `u_y`, `h`, `dhdx`, and `dhdy`.
+Each sample is stored under a zero-padded numeric key. The generated fields
+cover the domain `[-5, 5] × [-5, 5]`.
 
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/mcr/R2024b/bin/glnxa64/:/opt/mcr/R2024b/runtime/glnxa64/
+## Train a model
 
-### my fixes -> 
-apt-get install libglew-dev
+```bash
+python train_pinn.py \
+  --data_file data/training_data_512x512_500.h5 \
+  --epochs_number 5 \
+  --weights_path weights/model.pth
+```
 
-### existing error still ->  
-root@7d93a4766567:/workspaces/Poisson-Safety-Boundary-Determiner# ./matlab/generate_maps_and_psf output.h5 100
-PostVMInit failed to initialize com.mathworks.mwswing.MJStartupForDesktop
-PostVMInit failed to initialize com.mathworks.mwswing.MJStartup
-Could not find java/awt/Component
+Training uses CUDA when available and otherwise runs on CPU. It saves the model
+weights and normalization statistics alongside the configured weights path.
 
-Error in javaclasspath
+## Run inference
 
-Error in javaclasspath
+Use a trained checkpoint and its matching normalization statistics:
 
-Error in javaaddpath (line 69)
+```bash
+python run_inference.py \
+  --data-path data/training_data_512x512_500.h5 \
+  --weights-path weights/model_best.pth \
+  --norm-stats-path weights/model_norm_stats.pt \
+  --sample-index 0
+```
 
-MATLAB:Java:GenericException
+Omit `--sample-index` to process all samples. Add `--cpu` to force CPU
+inference or `--show` to display the plots. Prediction plots are saved in
+`fig/`.
 
-## PINN
+## Repository layout
 
-![Example](fig/pinn_5_epochs.png)
-![Example](fig/pinn_15_epochs.png)
-![Example](fig/pinn_output2.png)
-![Example](fig/pinn_output_40_epochs.png)
+- `generate_data.py` — Python dataset generator.
+- `train_pinn.py` — model training.
+- `run_inference.py` — inference and prediction plots.
+- `data/` — HDF5 datasets.
+- `models/` — model definitions.
+- `weights/`, `results/release_weights/` — model weights and normalization data.
+- `cpp/` — C++ solver and its instructions.
+- `fig/` — example figures.
+
+## Example results
+
+![PINN after 5 epochs](fig/pinn_5_epochs.png)
+![PINN after 15 epochs](fig/pinn_15_epochs.png)
+![PINN output](fig/pinn_output2.png)
+![PINN after 40 epochs](fig/pinn_output_40_epochs.png)

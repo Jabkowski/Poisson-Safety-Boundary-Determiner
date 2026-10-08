@@ -1,178 +1,24 @@
+import argparse
+import copy
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+from scipy.ndimage import binary_erosion, label, center_of_mass
+from tqdm import tqdm
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import matplotlib.pyplot as plt
-import h5py
-import os
-import copy
-from scipy.ndimage import binary_erosion, label, center_of_mass
 from torch.utils.data import Dataset, DataLoader, random_split
-from tqdm import tqdm
 
-from models.unet import UNet, UNetBilinear
+from data.h5_poisson_dataset import H5PoissonDataset
+
+from models.double_unet import UNetDoublePoisson
 
 # Ustawienie ziarna losowości dla powtarzalności wyników
 torch.manual_seed(42)
 np.random.seed(42)
-
-class DoubleConv(nn.Module):
-    """(splot2d => BatchNorm => ReLU) * 2"""
-
-    def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(
-                in_channels, out_channels, kernel_size=3, padding=1
-            ),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                out_channels, out_channels, kernel_size=3, padding=1
-            ),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x):
-        return self.double_conv(x)
-
-
-class UNetSubNetwork(nn.Module):
-    """Dedykowana architektura UNet dla pojedynczego zadania fizycznego"""
-
-    def __init__(self, in_channels=1, out_channels=1):
-        super(UNetSubNetwork, self).__init__()
-        self.inc = DoubleConv(in_channels, 32)
-        self.down1 = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(32, 64)
-        )
-        self.down2 = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(64, 128)
-        )
-
-        self.up1 = nn.Upsample(
-            scale_factor=2, mode="bilinear", align_corners=True
-        )
-        self.conv_up1 = DoubleConv(128 + 64, 64)
-
-        self.up2 = nn.Upsample(
-            scale_factor=2, mode="bilinear", align_corners=True
-        )
-        self.conv_up2 = DoubleConv(64 + 32, 32)
-
-        self.outc = nn.Conv2d(32, out_channels, kernel_size=1)
-
-    def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-
-        x = self.up1(x3)
-        x = torch.cat([x, x2], dim=1)
-        x = self.conv_up1(x)
-
-        x = self.up2(x)
-        x = torch.cat([x, x1], dim=1)
-        x = self.conv_up2(x)
-
-        return self.outc(x)
-
-
-class UNetDoublePoisson(nn.Module):
-    """
-    Splotowy model U-Net realizujący strategię dwóch niezależnych sieci:
-    - u_net: generuje pole wektorowe u [B, 2, H, W]
-    - h_net: generuje pole bezpieczeństwa h [B, 1, H, W]
-    Wejście: siatka zajętości [B, 1, H, W]
-    Wyjście: połączony rozkład [B, 3, H, W] (u_x, u_y, h)
-    """
-
-    def __init__(self):
-        super(UNetDoublePoisson, self).__init__()
-        self.u_net = UNetBilinear(in_channels=1, out_channels=2)
-        self.h_net = UNetBilinear(in_channels=2, out_channels=1)
-        # self.u_net = UNetSubNetwork(in_channels=1, out_channels=2)
-        # self.h_net = UNetSubNetwork(in_channels=2, out_channels=1)
-        # self.h_net = UNet(in_channels=2, out_channels=1)
-
-    def forward(self, x):
-        u = self.u_net(x)
-        h = self.h_net(u)
-        return torch.cat([u, h], dim=1)
-
-
-class H5PoissonDataset(Dataset):
-    """
-    Klasa Dataset wczytująca wszystkie wygenerowane mapy i powiązane rozkłady h
-    z pliku HDF5 bezpośrednio do pamięci RAM, dla maksymalnej wydajności i stabilności na GPU.
-    """
-
-    def __init__(self, file_path):
-        self.grids = []
-        self.h_values = []
-        self.dhdx_values = []
-        self.dhdy_values = []
-        self.ux_values = []
-        self.uy_values = []
-        self.normalization_stats = None
-
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(
-                f"Nie znaleziono pliku bazy danych: {file_path}"
-            )
-
-        print(f"Ładowanie zestawu danych z pliku: {file_path}...")
-        with h5py.File(file_path, "r") as f:
-            # Sortujemy klucze (indeksy map) dla zachowania spójności
-            keys = sorted(list(f["grid"].keys()))
-            for key in tqdm(keys, desc="Wczytywanie map"):
-                # Obrazy w bazie są zapisane jako [H, W] lub [1, H, W];
-                # normalizujemy do [1, H, W], bo model oczekuje wejścia 4D [B, C, H, W].
-                def _as_channel_tensor(data):
-                    arr = np.asarray(data, dtype=np.float32)
-                    if arr.ndim == 2:
-                        arr = arr[None, ...]
-                    return torch.tensor(arr, dtype=torch.float32)
-
-                grid_data = _as_channel_tensor(f["grid"][key][:])
-                h_data = _as_channel_tensor(f["h"][key][:])
-                dhdx_data = _as_channel_tensor(f["dhdx"][key][:])
-                dhdy_data = _as_channel_tensor(f["dhdy"][key][:])
-                ux_data = _as_channel_tensor(f["u_x"][key][:])
-                uy_data = _as_channel_tensor(f["u_y"][key][:])
-
-                self.grids.append(grid_data)
-                self.h_values.append(h_data)
-                self.dhdx_values.append(dhdx_data)
-                self.dhdy_values.append(dhdy_data)
-                self.ux_values.append(ux_data)
-                self.uy_values.append(uy_data)
-
-    def set_normalization_stats(self, normalization_stats):
-        self.normalization_stats = normalization_stats
-
-    def _normalize_field(self, field_name, tensor):
-        if self.normalization_stats is None:
-            return tensor
-        if field_name not in self.normalization_stats:
-            return tensor
-        mean = self.normalization_stats[field_name]["mean"]
-        std = self.normalization_stats[field_name]["std"]
-        return (tensor - mean) / std
-
-    def __len__(self):
-        return len(self.grids)
-
-    def __getitem__(self, idx):
-        return (
-            self.grids[idx],
-            self._normalize_field("h", self.h_values[idx]),
-            self._normalize_field("dhdx", self.dhdx_values[idx]),
-            self._normalize_field("dhdy", self.dhdy_values[idx]),
-            self._normalize_field("ux", self.ux_values[idx]),
-            self._normalize_field("uy", self.uy_values[idx]),
-        )
 
 
 def compute_normalization_stats(dataset, train_indices, eps=1e-8):
@@ -202,7 +48,9 @@ def compute_normalization_stats(dataset, train_indices, eps=1e-8):
             total_count += tensor.numel()
 
         mean = total_sum / max(total_count, 1)
-        variance = max(total_sum_sq / max(total_count, 1) - mean * mean, 0.0)
+        variance = max(
+            total_sum_sq / max(total_count, 1) - mean * mean, 0.0
+        )
         std = float(np.sqrt(variance) + eps)
 
         stats[field_name] = {"mean": float(mean), "std": std}
@@ -223,8 +71,12 @@ def denormalize_pred_3ch(pred_3ch, normalization_stats):
     h_mean = normalization_stats["h"]["mean"]
     h_std = normalization_stats["h"]["std"]
 
-    pred_phys[:, 0:1, :, :] = pred_phys[:, 0:1, :, :] * ux_std + ux_mean
-    pred_phys[:, 1:2, :, :] = pred_phys[:, 1:2, :, :] * uy_std + uy_mean
+    pred_phys[:, 0:1, :, :] = (
+        pred_phys[:, 0:1, :, :] * ux_std + ux_mean
+    )
+    pred_phys[:, 1:2, :, :] = (
+        pred_phys[:, 1:2, :, :] * uy_std + uy_mean
+    )
     pred_phys[:, 2:3, :, :] = pred_phys[:, 2:3, :, :] * h_std + h_mean
     return pred_phys
 
@@ -390,7 +242,7 @@ def calc_poisson_pinn_loss(
     # Normalize gradient data losses similarly
     loss_dhdx_data = loss_dhdx_data * (dx**2)
     loss_dhdy_data = loss_dhdy_data * (dx**2)
-    loss_ux_data = loss_ux_data * (dx**2)  
+    loss_ux_data = loss_ux_data * (dx**2)
     loss_uy_data = loss_uy_data * (dx**2)
     value_data_loss = (
         loss_h_data
@@ -401,6 +253,7 @@ def calc_poisson_pinn_loss(
     )
 
     return pde_loss, value_data_loss, bc_loss, dux_dx, dux_dy
+
 
 def predict_safety_with_gradients(model, x, y):
     """Pozwala na odpytanie sieci h_net o wartość bezpieczeństwa i jej gradienty (model MLP)."""
@@ -493,9 +346,13 @@ def plot_poisson_prediction_example(
     X, Y = np.meshgrid(x, y)
 
     has_reference = (
-        h_true is not None and ux_true is not None and uy_true is not None
+        h_true is not None
+        and ux_true is not None
+        and uy_true is not None
     )
-    fig, axes = plt.subplots(1, 4 if has_reference else 2, figsize=(18, 5.5))
+    fig, axes = plt.subplots(
+        1, 4 if has_reference else 2, figsize=(18, 5.5)
+    )
 
     if has_reference:
         h_true_np = _to_numpy_2d(h_true)
@@ -510,7 +367,10 @@ def plot_poisson_prediction_example(
         uy_true_np = np.where(mask, uy_true_np, np.nan)
         h_true_np = np.where(mask, h_true_np, np.nan)
 
-        if ux_true_np.shape != X.shape and ux_true_np.T.shape == X.shape:
+        if (
+            ux_true_np.shape != X.shape
+            and ux_true_np.T.shape == X.shape
+        ):
             ux_true_np = ux_true_np.T
             uy_true_np = uy_true_np.T
 
@@ -664,8 +524,25 @@ def plot_poisson_prediction_example(
 
 # --- GŁÓWNA PĘTLA TRENINGOWA DLA WSZYSTKICH MAP ---
 if __name__ == "__main__":
-    H5_FILE_PATH = "data/nik_training_data_512x512_2000.h5"
-    WEIGHTS_PATH = "weights/pde_1_0_poisson_unet_bilinear_model_512x512_2000_e40_normalization_bc_fix_test.pth"
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data_file",
+        nargs="?",
+        default="data/training_data_512x512_500.h5",
+    )
+    parser.add_argument(
+        "--epochs_number", nargs="?", type=int, default=5
+    )
+    parser.add_argument("--w_pde", nargs="?", type=float, default=1.0)
+    parser.add_argument("--w_bc", nargs="?", type=float, default=1.0)
+    parser.add_argument("--w_mse", nargs="?", type=float, default=1.0)
+    parser.add_argument(
+        "--weights_path", nargs="?", default="weights/weights.pth"
+    )
+    args = parser.parse_args()
+
+    H5_FILE_PATH = args.data_file
+    WEIGHTS_PATH = args.weights_path
     BEST_WEIGHTS_PATH = WEIGHTS_PATH.replace(".pth", "_best.pth")
     NORM_STATS_PATH = WEIGHTS_PATH.replace(".pth", "_norm_stats.pt")
     GRID_SIZE = 512.0
@@ -698,7 +575,9 @@ if __name__ == "__main__":
     )
     full_dataset.set_normalization_stats(normalization_stats)
 
-    os.makedirs(os.path.dirname(NORM_STATS_PATH) or ".", exist_ok=True)
+    os.makedirs(
+        os.path.dirname(NORM_STATS_PATH) or ".", exist_ok=True
+    )
     torch.save(
         {
             "stats": normalization_stats,
@@ -729,10 +608,10 @@ if __name__ == "__main__":
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    epochs = 40
-    w_pde = 1.0
-    w_bc = 1
-    w_mse = 1
+    epochs = args.epochs_number
+    w_pde = args.w_pde
+    w_bc = args.w_bc
+    w_mse = args.w_mse
     early_stopping_patience = 12
     early_stopping_min_delta = 1e-6
     best_val_total = float("inf")
@@ -785,7 +664,9 @@ if __name__ == "__main__":
             loss_data = loss_data_h + loss_data_ux + loss_data_uy
 
             # Strata fizyczna PDE wyznaczana splotowo na GPU
-            pred_phys = denormalize_pred_3ch(pred_3ch, normalization_stats)
+            pred_phys = denormalize_pred_3ch(
+                pred_3ch, normalization_stats
+            )
             pde_loss, _, bc_loss, _, _ = calc_poisson_pinn_loss(
                 pred_phys,
                 h_true,
@@ -798,9 +679,13 @@ if __name__ == "__main__":
                 detach_u=True,
             )
             # Całkowita hybrydowa strata (Dane + Fizyka)
-            loss = w_mse*loss_data + w_pde * pde_loss + w_bc * bc_loss
+            loss = (
+                w_mse * loss_data + w_pde * pde_loss + w_bc * bc_loss
+            )
             if prev_epoch != epoch:
-                print(f"lmse: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}, total: {loss}")
+                print(
+                    f"lmse: {loss_data}, pde: {w_pde * pde_loss}, bc: {w_bc * bc_loss}, total: {loss}"
+                )
 
             loss.backward()
             optimizer.step()
@@ -818,7 +703,7 @@ if __name__ == "__main__":
         val_pde_loss = 0.0
         val_bc_loss = 0.0
         val_total_loss = 0.0
-        val_idx=0
+        val_idx = 0
         with torch.no_grad():
             for (
                 grid_val,
@@ -838,8 +723,12 @@ if __name__ == "__main__":
                 pred_val = model(grid_val)
                 h_val_pred = pred_val[:, 2:3, :, :]
                 val_h = criterion(h_val_pred, h_val_true)
-                val_ux = criterion(pred_val[:, 0:1, :, :], ux_val_true)
-                val_uy = criterion(pred_val[:, 1:2, :, :], uy_val_true)
+                val_ux = criterion(
+                    pred_val[:, 0:1, :, :], ux_val_true
+                )
+                val_uy = criterion(
+                    pred_val[:, 1:2, :, :], uy_val_true
+                )
                 val_data = val_h + val_ux + val_uy
 
                 val_mse_h += val_h.item()
@@ -872,7 +761,7 @@ if __name__ == "__main__":
                 val_pde_loss += val_pde_item
                 val_bc_loss += val_bc_item
                 val_total_loss += val_total_item
-                
+
         val_mse_h_avg = val_mse_h / len(val_loader)
         val_mse_ux_avg = val_mse_ux / len(val_loader)
         val_mse_uy_avg = val_mse_uy / len(val_loader)
@@ -908,19 +797,9 @@ if __name__ == "__main__":
                 )
                 break
 
-        grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
-        # plot_poisson_prediction_example(
-        #     model,
-        #     grid,
-        #     grid_size=GRID_SIZE,
-        #     device=device,
-        #     h_true=h_true,
-        #     ux_true=ux_true,
-        #     uy_true=uy_true,
-        #     save_path="fig/poisson_unet_bilinear_model_512x512_1000_e20.png",
-        #     show=False,
-        # )
-        
+        grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = (
+            val_dataset[0]
+        )
 
     # 4. Załadowanie najlepszych wag i zapis końcowy
     if os.path.isfile(BEST_WEIGHTS_PATH):
@@ -935,7 +814,9 @@ if __name__ == "__main__":
 
     # --- 6. WIZUALIZACJA WYNIKÓW DLA PIERWSZEJ MAPY TESTOWEJ ---
     print("\nGenerowanie wykresu końcowego dla wybranej mapy...")
-    grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = val_dataset[0]
+    grid, h_true, dhdx_true, dhdy_true, ux_true, uy_true = (
+        val_dataset[0]
+    )
     plot_poisson_prediction_example(
         model,
         grid,
