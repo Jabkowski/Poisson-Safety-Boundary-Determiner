@@ -109,7 +109,7 @@ def plot_poisson_pinn_example(
         cmap="gray_r",
         alpha=0.3,
     )
-    ax.set_title(f"{label} of the potential field $\\mathbf{{u}}$\n(Streamlines & Magnitude)")
+    ax.set_title("$\\mathbf{u}(x,y)$")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.axis("equal")
@@ -124,7 +124,7 @@ def plot_poisson_pinn_example(
         cmap="gray_r",
         alpha=0.3,
     )
-    ax.set_title(f"{label} of the safety function $h(x,y)$")
+    ax.set_title("$h(x,y)$")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.axis("equal")

@@ -2,16 +2,16 @@ import argparse
 import os
 import time
 
-from py_utils.utils import plot_poisson_pinn_example
+from run_inference_paper import plot_prediction
 
 DEFAULT_DATA_PATH = "data/Carla/carla_10_08_examples_grid.h5"
 DEFAULT_WEIGHTS_PATH = (
-    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth"
+    "results/release_weights_new/pde_1_0_unet_512_2000_e15_fix_denorm_norm_best.pth"
     #poisson_unet_bilinear_model_512x512_2000_e35_ok_inf
     #poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1
 )
 DEFAULT_NORM_STATS_PATH = (
-    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_norm_stats.pt"
+    "results/release_weights_new/pde_1_0_unet_512_2000_e15_fix_denorm_norm_norm_stats.pt"
 )
 DEFAULT_EXTENT = (-5.0, 5.0, -5.0, 5.0)
 
@@ -143,15 +143,12 @@ def main():
             )
 
             print(f"Plotting prediction for sample {sample_index} from {args.data_path}")
-            plot_poisson_pinn_example(
+            plot_prediction(
                 grid_np,
-                h_pred,
-                ux_pred,
-                uy_pred,
+                (h_pred, ux_pred, uy_pred),
                 save_path=save_path,
                 show=args.show,
                 extent=DEFAULT_EXTENT,
-                label="Prediction",
             )
             print(f"Saved plot to {save_path}")
             print(f"Model prediction time: {prediction_seconds:.4f} s")

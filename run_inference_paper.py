@@ -9,12 +9,12 @@ from py_utils.utils import _to_2d
 
 DEFAULT_DATA_PATH = "data/services_rect_data_512x512_10.h5"
 DEFAULT_WEIGHTS_PATH = (
-    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth"
+    "results/release_weights_new/pde_1_0_unet_512_2000_e15_fix_denorm_norm_best.pth"
     #poisson_unet_bilinear_model_512x512_2000_e35_ok_inf
     #poisson_first_bilinear_second_UNet_model_512x512_1000_e30_mse_1
 )
 DEFAULT_NORM_STATS_PATH = (
-    "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_norm_stats.pt"
+    "results/release_weights_new/pde_1_0_unet_512_2000_e15_fix_denorm_norm_norm_stats.pt"
 )
 DEFAULT_EXTENT = (-5.0, 5.0, -5.0, 5.0)
 
@@ -52,29 +52,43 @@ def load_ground_truth(h5_path, sample_index):
         )
 
 
-def _plot_u_field(fig, ax, X, Y, grid, mask, ux, uy, extent, levels, title):
+# Single-column IEEE width is ~3.5 in; fonts are sized for that.
+PAPER_RC = {
+    "font.family": "serif",
+    "mathtext.fontset": "cm",
+    "font.size": 7,
+    "axes.labelsize": 7,
+    "axes.titlesize": 8,
+    "xtick.labelsize": 6,
+    "ytick.labelsize": 6,
+    "axes.linewidth": 0.5,
+    "xtick.major.width": 0.5,
+    "ytick.major.width": 0.5,
+    "xtick.major.size": 2,
+    "ytick.major.size": 2,
+}
+
+
+def _plot_u_field(ax, X, Y, grid, mask, ux, uy, extent, levels):
     magnitude = np.where(mask, np.sqrt(ux**2 + uy**2), np.nan)
     ux_plot = np.where(mask, ux, np.nan)
     uy_plot = np.where(mask, uy, np.nan)
 
     contour = ax.contourf(X, Y, magnitude, levels=levels, cmap="viridis")
-    fig.colorbar(contour, ax=ax, label="Magnitude $\\|\\mathbf{u}\\|$")
-    ax.streamplot(X, Y, ux_plot, uy_plot, color="white", linewidth=0.8, density=1.0)
+    contour.set_rasterized(True)
+    ax.streamplot(
+        X, Y, ux_plot, uy_plot, color="white", linewidth=0.4, density=0.8,
+        arrowsize=0.5,
+    )
     ax.imshow(grid, origin="lower", extent=extent, cmap="gray_r", alpha=0.3)
-    ax.set_title(title)
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.axis("equal")
+    return contour
 
 
-def _plot_h(fig, ax, X, Y, grid, mask, h, extent, levels, title):
+def _plot_h(ax, X, Y, grid, mask, h, extent, levels):
     contour = ax.contourf(X, Y, np.where(mask, h, np.nan), levels=levels, cmap="plasma")
-    fig.colorbar(contour, ax=ax, label="Value of $h$")
+    contour.set_rasterized(True)
     ax.imshow(grid, origin="lower", extent=extent, cmap="gray_r", alpha=0.3)
-    ax.set_title(title)
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.axis("equal")
+    return contour
 
 
 def plot_prediction_vs_ground_truth(
@@ -86,11 +100,12 @@ def plot_prediction_vs_ground_truth(
     extent=DEFAULT_EXTENT,
 ):
     """
-    Plot a 2x2 comparison: rows are prediction / ground truth, columns are the
-    potential field u (streamlines & magnitude) and the safety function h.
-    pred and true are (h, u_x, u_y) tuples. Each column shares one color scale.
-    The predicted h is multiplied by max(h_true) / max(h_pred) over free cells,
-    so both h plots have the same maximum value.
+    Plot a 2x2 comparison sized for a single column of a two-column paper.
+    Rows are prediction / ground truth (labelled on the left), columns are the
+    potential field u (streamlines & magnitude) and the safety function h
+    (titled on top). pred and true are (h, u_x, u_y) tuples. Each column shares
+    one color scale and one colorbar. If save_path is given, a PDF with the
+    same base name is written next to it.
     """
     grid = _to_2d(grid)
     h_pred, ux_pred, uy_pred = (_to_2d(v) for v in pred)
@@ -104,10 +119,6 @@ def plot_prediction_vs_ground_truth(
     mask = grid == 0
     extent = [x_min, x_max, y_min, y_max]
 
-    # h_scale = h_true[mask].max() / h_pred[mask].max()
-    # h_pred = h_pred * h_scale
-    # print(f"h_pred scaled by {h_scale:.4f} to match max(h_true) = {h_true[mask].max():.4f}")
-
     mag_max = max(
         np.nanmax(np.where(mask, np.sqrt(ux**2 + uy**2), np.nan))
         for ux, uy in ((ux_pred, uy_pred), (ux_true, uy_true))
@@ -116,31 +127,116 @@ def plot_prediction_vs_ground_truth(
     u_levels = np.linspace(0.0, mag_max, 51)
     h_levels = np.linspace(h_values.min(), h_values.max(), 51)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 11))
     rows = (
-        ("Prediction", h_pred, ux_pred, uy_pred, f""),
-        ("Ground truth", h_true, ux_true, uy_true, ""),
+        ("Prediction", h_pred, ux_pred, uy_pred),
+        ("Ground truth", h_true, ux_true, uy_true),
     )
-    for row, (label, h, ux, uy, h_note) in zip(axes, rows):
-        _plot_u_field(
-            fig, row[0], X, Y, grid, mask, ux, uy, extent, u_levels,
-            f"{label} of the potential field $\\mathbf{{u}}$\n(Streamlines & Magnitude)",
+    with plt.rc_context(PAPER_RC):
+        fig, axes = plt.subplots(
+            2, 2, figsize=(3.5, 3.4), sharex=True, sharey=True,
+            constrained_layout=True,
         )
-        _plot_h(
-            fig, row[1], X, Y, grid, mask, h, extent, h_levels,
-            f"{label} of the safety function $h(x,y)${h_note}",
+        for i, (label, h, ux, uy) in enumerate(rows):
+            u_contour = _plot_u_field(
+                axes[i, 0], X, Y, grid, mask, ux, uy, extent, u_levels
+            )
+            h_contour = _plot_h(axes[i, 1], X, Y, grid, mask, h, extent, h_levels)
+            axes[i, 0].set_ylabel(f"{label}\n$y$")
+
+        for ax in axes.flat:
+            ax.set_aspect("equal")
+        for ax in axes[1]:
+            ax.set_xlabel("$x$")
+        axes[0, 0].set_title("$\\mathbf{u}(x,y)$")
+        axes[0, 1].set_title("$h(x,y)$")
+
+        cb_u = fig.colorbar(u_contour, ax=axes[:, 0], location="bottom", shrink=0.9, pad=0.02, aspect=25)
+        cb_u.set_label("$\\|\\mathbf{u}\\|$")
+        cb_h = fig.colorbar(h_contour, ax=axes[:, 1], location="bottom", shrink=0.9, pad=0.02, aspect=25)
+        cb_h.set_label("$h$")
+        for cb, levels in ((cb_u, u_levels), (cb_h, h_levels)):
+            cb.set_ticks(np.linspace(levels[0], levels[-1], 4))
+            cb.ax.xaxis.set_major_formatter(lambda x, _: f"{abs(x) if abs(x) < 5e-3 else x:.2f}")
+            cb.ax.tick_params(labelsize=6, width=0.5, length=2)
+            cb.outline.set_linewidth(0.5)
+
+        if save_path is not None:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            fig.savefig(save_path, dpi=600)
+            fig.savefig(os.path.splitext(save_path)[0] + ".pdf", dpi=600)
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return fig
+
+
+def plot_prediction(
+    grid,
+    pred,
+    save_path=None,
+    show=False,
+    extent=DEFAULT_EXTENT,
+):
+    """
+    Plot a 1x2 prediction-only figure in the same paper style as
+    plot_prediction_vs_ground_truth: potential field u on the left, safety
+    function h on the right, each with its own colorbar. pred is a
+    (h, u_x, u_y) tuple. If save_path is given, a PDF with the same base name
+    is written next to it.
+    """
+    grid = _to_2d(grid)
+    h_pred, ux_pred, uy_pred = (_to_2d(v) for v in pred)
+
+    x_min, x_max, y_min, y_max = extent
+    X, Y = np.meshgrid(
+        np.linspace(x_min, x_max, grid.shape[1]),
+        np.linspace(y_min, y_max, grid.shape[0]),
+    )
+    mask = grid == 0
+    extent = [x_min, x_max, y_min, y_max]
+
+    mag_max = np.nanmax(np.where(mask, np.sqrt(ux_pred**2 + uy_pred**2), np.nan))
+    u_levels = np.linspace(0.0, mag_max, 51)
+    h_levels = np.linspace(h_pred[mask].min(), h_pred[mask].max(), 51)
+
+    with plt.rc_context(PAPER_RC):
+        fig, axes = plt.subplots(
+            1, 2, figsize=(3.5, 2.2), sharey=True, constrained_layout=True
         )
+        u_contour = _plot_u_field(
+            axes[0], X, Y, grid, mask, ux_pred, uy_pred, extent, u_levels
+        )
+        h_contour = _plot_h(axes[1], X, Y, grid, mask, h_pred, extent, h_levels)
 
-    plt.tight_layout()
+        for ax in axes:
+            ax.set_aspect("equal")
+            ax.set_xlabel("$x$")
+        axes[0].set_ylabel("$y$")
+        axes[0].set_title("$\\mathbf{u}(x,y)$")
+        axes[1].set_title("$h(x,y)$")
 
-    if save_path is not None:
-        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-        plt.savefig(save_path, dpi=300)
+        cb_u = fig.colorbar(u_contour, ax=axes[0], location="bottom", shrink=0.9, pad=0.02, aspect=20)
+        cb_u.set_label("$\\|\\mathbf{u}\\|$")
+        cb_h = fig.colorbar(h_contour, ax=axes[1], location="bottom", shrink=0.9, pad=0.02, aspect=20)
+        cb_h.set_label("$h$")
+        for cb, levels in ((cb_u, u_levels), (cb_h, h_levels)):
+            cb.set_ticks(np.linspace(levels[0], levels[-1], 4))
+            cb.ax.xaxis.set_major_formatter(lambda x, _: f"{abs(x) if abs(x) < 5e-3 else x:.2f}")
+            cb.ax.tick_params(labelsize=6, width=0.5, length=2)
+            cb.outline.set_linewidth(0.5)
 
-    if show:
-        plt.show()
-    else:
-        plt.close(fig)
+        if save_path is not None:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            fig.savefig(save_path, dpi=600)
+            fig.savefig(os.path.splitext(save_path)[0] + ".pdf", dpi=600)
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
 
     return fig
 
