@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from data.h5_poisson_dataset import H5PoissonDataset
+from py_utils.h5_poisson_dataset import H5PoissonDataset
 
 from models.double_unet import UNetDoublePoisson
 from models.double_unet import denormalize_pred_3ch
@@ -57,6 +57,18 @@ def compute_normalization_stats(dataset, train_indices, eps=1e-8):
         stats[field_name] = {"mean": float(mean), "std": std}
 
     return stats
+
+
+def denormalize_targets(normalization_stats, **fields):
+    """
+    Konwertuje znormalizowane cele z datasetu do skali fizycznej,
+    zgodnej z pred_phys przekazywanym do calc_poisson_pinn_loss.
+    """
+    return [
+        tensor * normalization_stats[name]["std"]
+        + normalization_stats[name]["mean"]
+        for name, tensor in fields.items()
+    ]
 
 
 def compute_batch_boundary_u_targets(grid_batch, dx=10.0 / 128.0):
@@ -647,11 +659,14 @@ if __name__ == "__main__":
             )
             pde_loss, _, bc_loss, _, _ = calc_poisson_pinn_loss(
                 pred_phys,
-                h_true,
-                dhdx_true,
-                dhdy_true,
-                ux_true,
-                uy_true,
+                *denormalize_targets(
+                    normalization_stats,
+                    h=h_true,
+                    dhdx=dhdx_true,
+                    dhdy=dhdy_true,
+                    ux=ux_true,
+                    uy=uy_true,
+                ),
                 grid,
                 dx=dx,
                 detach_u=True,
@@ -719,11 +734,14 @@ if __name__ == "__main__":
                 )
                 pde_val, _, bc_val, _, _ = calc_poisson_pinn_loss(
                     pred_val_phys,
-                    h_val_true,
-                    dhdx_val_true,
-                    dhdy_val_true,
-                    ux_val_true,
-                    uy_val_true,
+                    *denormalize_targets(
+                        normalization_stats,
+                        h=h_val_true,
+                        dhdx=dhdx_val_true,
+                        dhdy=dhdy_val_true,
+                        ux=ux_val_true,
+                        uy=uy_val_true,
+                    ),
                     grid_val,
                     dx=dx,
                     detach_u=True,

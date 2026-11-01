@@ -92,7 +92,7 @@ def plot_poisson_pinn_example(
 
     ax = axes[0]
     contour = ax.contourf(X, Y, magnitude, levels=50, cmap="viridis")
-    fig.colorbar(contour, ax=ax, label="Magnituda ||u||")
+    fig.colorbar(contour, ax=ax, label="Magnitude ||u||")
     ax.streamplot(
         X,
         Y,
@@ -109,14 +109,14 @@ def plot_poisson_pinn_example(
         cmap="gray_r",
         alpha=0.3,
     )
-    ax.set_title(f"{label} pola odpychania $\\mathbf{{u}}$\n(Streamlines & Magnituda)")
+    ax.set_title(f"{label} of the potential field $\\mathbf{{u}}$\n(Streamlines & Magnitude)")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.axis("equal")
 
     ax = axes[1]
     contour = ax.contourf(X, Y, h_plot, levels=50, cmap="plasma")
-    fig.colorbar(contour, ax=ax, label="Wartość h")
+    fig.colorbar(contour, ax=ax, label="Value of $h$")
     ax.imshow(
         grid,
         origin="lower",
@@ -124,7 +124,7 @@ def plot_poisson_pinn_example(
         cmap="gray_r",
         alpha=0.3,
     )
-    ax.set_title(f"{label} funkcji bezpieczeństwa $h(x,y)$")
+    ax.set_title(f"{label} of the safety function $h(x,y)$")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.axis("equal")

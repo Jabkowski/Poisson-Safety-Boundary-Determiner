@@ -4,7 +4,7 @@ import time
 
 from py_utils.utils import plot_poisson_pinn_example
 
-DEFAULT_DATA_PATH = "data/nik_training_data_512x512_10.h5"
+DEFAULT_DATA_PATH = "data/Carla/carla_10_08_examples_grid.h5"
 DEFAULT_WEIGHTS_PATH = (
     "results/release_weights/pde_0_5_poisson_unet_bilinear_model_512x512_2000_e35_normalization_bc_fix_test_best.pth"
     #poisson_unet_bilinear_model_512x512_2000_e35_ok_inf
@@ -138,7 +138,8 @@ def main():
 
             save_path = os.path.join(
                 "fig",
-                f"nik_10_pred_release_1_weights_{base_name}_sample_{sample_index:06d}_prediction.png",
+                "prediction_paper",
+                f"carla_pred_release_1_weights_{base_name}_sample_{sample_index:06d}_prediction.png",
             )
 
             print(f"Plotting prediction for sample {sample_index} from {args.data_path}")
@@ -150,7 +151,7 @@ def main():
                 save_path=save_path,
                 show=args.show,
                 extent=DEFAULT_EXTENT,
-                label="Predykcja",
+                label="Prediction",
             )
             print(f"Saved plot to {save_path}")
             print(f"Model prediction time: {prediction_seconds:.4f} s")
