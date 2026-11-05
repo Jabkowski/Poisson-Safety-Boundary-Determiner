@@ -79,7 +79,7 @@ python analyze_trajectory_obstacle_distance.py paths.csv \
 ```
 
 The script selects calibration by the CSV scenario when a preset is available
-(`corridor_zigzag_3` and `carla_08`); otherwise it uses the
+(`corridor_zigzag_3`, `carla_08`, and `arena3_t1`); otherwise it uses the
 `corridor_zigzag_3` defaults. Override calibration with `--plot-bounds`
 (`LEFT RIGHT TOP BOTTOM` in pixels) and `--world-bounds`
 (`X_MIN X_MAX Y_MIN Y_MAX`) for other maps. For example, the Carla 08 capture

@@ -21,9 +21,19 @@ SCENARIO_CALIBRATIONS = {
         "plot_bounds": (109.0, 1178.0, 86.0, 1155.0),
         "world_bounds": (-12.8, 12.8, -12.8, 12.8),
     },
+    "arena3_t1": {
+        "plot_bounds": (98.0, 1178.0, 43.0, 449.0),
+        "world_bounds": (-1.6, 16.4, -5.1, 1.65),
+    },
 }
-EXPECTED_START = (-10.0, 5.0)
-EXPECTED_GOAL = (5.0, 10.0)
+SCENARIO_ENDPOINTS = {
+    "corridor_zigzag_3": (
+        ((1.5587, -1.0), (9.5217, -1.8)),
+        ((0.0, -3.0), (9.5217, -1.8)),
+    ),
+    "carla_08": (((-10.0, 5.0), (5.0, 10.0)),),
+    "arena3_t1": (((0.0, -4.0), (13.0, -4.1)),),
+}
 PROGRESS_SAMPLES = 101
 MIN_OBSTACLE_COMPONENT_PIXELS = 50
 
@@ -76,15 +86,17 @@ def _read_trajectories(csv_path: Path) -> list[dict[str, object]]:
             raise ValueError(
                 f"Trajectory {key} must have at least two finite nodes"
             )
-        for actual, expected, label in (
-            (coordinates[0], EXPECTED_START, "start"),
-            (coordinates[-1], EXPECTED_GOAL, "goal"),
+        endpoint_options = SCENARIO_ENDPOINTS.get(key[0])
+        if endpoint_options and not any(
+            np.allclose(coordinates[0], start, atol=1e-3, rtol=0.0)
+            and np.allclose(coordinates[-1], goal, atol=1e-3, rtol=0.0)
+            for start, goal in endpoint_options
         ):
-            if not np.allclose(actual, expected, atol=1e-3, rtol=0.0):
-                raise ValueError(
-                    f"Trajectory {key} has unexpected {label}: "
-                    f"({actual[0]:.4f}, {actual[1]:.4f})"
-                )
+            raise ValueError(
+                f"Trajectory {key} has unexpected start/goal: "
+                f"({coordinates[0, 0]:.4f}, {coordinates[0, 1]:.4f}) -> "
+                f"({coordinates[-1, 0]:.4f}, {coordinates[-1, 1]:.4f})"
+            )
         trajectories.append({"key": key, "points": coordinates})
 
     if not trajectories:
