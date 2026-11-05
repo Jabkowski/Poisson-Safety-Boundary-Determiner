@@ -66,9 +66,41 @@ Omit `--sample-index` to process all samples. Add `--cpu` to force CPU
 inference or `--show` to display the plots. Prediction plots are saved in
 `fig/`.
 
+## Analyze trajectory distance to obstacles
+
+The trajectory analysis script reads straight-line segments between CSV nodes,
+resamples each path by arc length, and estimates distance to neutral-gray
+obstacle regions in the supplied plot image:
+
+```bash
+python analyze_trajectory_obstacle_distance.py paths.csv \
+  --image corridor_zigzag_3.png \
+  --output-dir trajectory_analysis
+```
+
+The script selects calibration by the CSV scenario when a preset is available
+(`corridor_zigzag_3` and `carla_08`); otherwise it uses the
+`corridor_zigzag_3` defaults. Override calibration with `--plot-bounds`
+(`LEFT RIGHT TOP BOTTOM` in pixels) and `--world-bounds`
+(`X_MIN X_MAX Y_MIN Y_MAX`) for other maps. For example, the Carla 08 capture
+can be analyzed with:
+
+```bash
+python analyze_trajectory_obstacle_distance.py \
+  /path/to/run_carla_step_005/paths.csv \
+  --image /path/to/run_carla_step_005/preview_carla_08.png \
+  --output-dir output/carla
+```
+
+It writes one profile per trajectory, mean and sample standard deviation at
+each normalized path position, per-path distance statistics, and a plot with
+English labels. Distances are estimates from the rasterized image, rather
+than exact distances to vector obstacle boundaries.
+
 ## Repository layout
 
 - `generate_data.py` — Python dataset generator.
+- `analyze_trajectory_obstacle_distance.py` — trajectory-to-obstacle distance analysis.
 - `train_pinn.py` — model training.
 - `run_inference.py` — inference and prediction plots.
 - `data/` — HDF5 datasets.
